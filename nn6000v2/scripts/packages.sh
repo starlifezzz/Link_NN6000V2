@@ -158,11 +158,6 @@ clone_lucky() {
     fi
 }
 
-clone_adguardhome() {
-    clone_packages "luci-app-adguardhome" \
-        "${GITHUB_BASE}wzdddyy/luci-app-adguardhome.git" \
-        "$OPENWRT_PACKAGES_DIR/luci-app-adguardhome"
-}
 
 clone_easytier() {
     local EASYTIER_DIR="$OPENWRT_PACKAGES_DIR/luci-app-easytier"
