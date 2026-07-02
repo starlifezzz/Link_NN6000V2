@@ -45,7 +45,6 @@ main() {
     clone_lucky
     clone_diskman
     clone_dockerman
-    clone_adguardhome
     clone_easytier
     clone_oaf
     clone_luci_tailscale
