@@ -31,7 +31,6 @@
 | **luci-app-argon**       | Argon 主题      |
 | **luci-app-istorex**     | 应用商店          |
 | **luci-app-dockerman**   | Docker        |
-| **luci-app-adguardhome** | 广告过滤          |
 | **luci-app-diskman**     | 磁盘管理          |
 | **luci-app-smartdns**    | DNS 加速        |
 | **luci-app-autoreboot**  | 定时重启          |
@@ -42,7 +41,6 @@
 | **luci-app-easytier**    | EasyTier 虚拟组网 |
 | **luci-app-tailscale-community**    | Tailscale 虚拟组网 |
 | **luci-app-lucky**       | 多功能网络代理插件            |
-| **luci-app-oaf**         | 应用过滤-默认禁用        |
 | **luci-app-ttyd**        | 终端            |
 | **luci-app-quickfile**   | 文件管理          |
 | **luci-app-samba4**      | SMB 文件共享      |
