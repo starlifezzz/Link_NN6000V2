@@ -76,28 +76,6 @@ install_openwrt_packages() {
         luci-app-tailscale-community
 }
 
-clone_passwall() {
-    local PASSWALL_LUCI_DIR="$OPENWRT_PACKAGES_DIR/luci-app-passwall"
-    local PASSWALL_PACKAGES_DIR="$OPENWRT_PACKAGES_DIR/passwall-packages"
-    local TEMP_DIR="$OPENWRT_PACKAGES_DIR/openwrt-passwall-temp"
-    local PASSWALL_PKGS_TEMP="$OPENWRT_PACKAGES_DIR/passwall-packages-temp"
-    
-    clone_packages "luci-app-passwall" \
-        "${GITHUB_BASE}Openwrt-Passwall/openwrt-passwall.git" \
-        "$TEMP_DIR" \
-        "" \
-        "" \
-        "rm -rf \"$PASSWALL_LUCI_DIR\" 2>/dev/null || true; mv \"$TEMP_DIR/luci-app-passwall\" \"$PASSWALL_LUCI_DIR\"; rm -rf \"$TEMP_DIR\""
-    
-    rm -rf "$PASSWALL_PACKAGES_DIR" 2>/dev/null || true
-    
-    clone_packages "passwall-packages" \
-        "${GITHUB_BASE}Openwrt-Passwall/openwrt-passwall-packages.git" \
-        "$PASSWALL_PKGS_TEMP" \
-        "" \
-        "" \
-        "for pkg in \"$PASSWALL_PKGS_TEMP\"/*; do if [ -d \"\$pkg\" ]; then pkg_name=\$(basename \"\$pkg\"); mv \"\$pkg\" \"$OPENWRT_PACKAGES_DIR/\$pkg_name\"; fi; done; rm -rf \"$PASSWALL_PKGS_TEMP\""
-}
 
 clone_lucky() {
     local LUCKY_REPO="${GITHUB_BASE}gdy666/luci-app-lucky.git"
@@ -176,43 +154,6 @@ clone_easytier() {
     rm -rf "$TEMP_DIR"
 }
 
-clone_oaf() {
-    local OAF_REPO="${GITHUB_BASE}destan19/OpenAppFilter.git"
-    local OAF_DIR="$OPENWRT_PACKAGES_DIR/OpenAppFilter"
-    local TEMP_DIR="$OPENWRT_PACKAGES_DIR/oaf-temp"
-
-    (cd "$BUILD_DIR" && ./scripts/feeds install -f kmod-ipt-conntrack kmod-ipt-nat)
-    
-    clone_packages "OpenAppFilter" \
-        "$OAF_REPO" \
-        "$TEMP_DIR" \
-        "oaf open-app-filter luci-app-oaf" \
-        "" \
-        "mkdir -p \"$OAF_DIR\" && rm -rf \"$OAF_DIR/oaf\" \"$OAF_DIR/open-app-filter\" \"$OAF_DIR/luci-app-oaf\" && mv \"$TEMP_DIR/oaf\" \"$TEMP_DIR/open-app-filter\" \"$TEMP_DIR/luci-app-oaf\" \"$OAF_DIR/\""
-
-    rm -rf "$TEMP_DIR"
-
-    local oaf_makefile="$OAF_DIR/oaf/Makefile"
-    if [ -f "$oaf_makefile" ] ; then
-        sed -i 's/DEPENDS:=.*oaf/DEPENDS:=+kmod-ipt-conntrack +kmod-ipt-nat/g' "$oaf_makefile"
-    fi
-
-    local appfilter_config="$OAF_DIR/open-app-filter/files/etc/config/appfilter"
-    if [ -f "$appfilter_config" ] ; then
-        sed -i "s/option enabled '1'/option enabled '0'/g" "$appfilter_config"
-    fi
-
-    local disable_script="$OAF_DIR/luci-app-oaf/root/etc/uci-defaults/99_disable_oaf"
-    mkdir -p "$(dirname "$disable_script")"
-    cat > "$disable_script" << 'EOF'
-#!/bin/sh
-[ "$(uci get appfilter.global.enable 2>/dev/null)" = "0" ] && {
-    /etc/init.d/appfilter disable
-    /etc/init.d/appfilter stop
-}
-EOF
-    chmod +x "$disable_script"
-}
 
 clone_diskman() {
     local path="$OPENWRT_PACKAGES_DIR/luci-app-diskman"
