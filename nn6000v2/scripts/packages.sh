@@ -72,8 +72,6 @@ install_openwrt_packages() {
         luci-app-store quickstart luci-app-quickstart luci-app-istorex \
         smartdns luci-app-smartdns luci-theme-argon luci-app-argon-config \
         luci-lib-docker luci-app-lucky luci-app-easytier \
-        luci-app-oaf oaf open-app-filter \
-        luci-app-diskman luci-app-dockerman luci-app-quickfile luci-app-passwall \
         luci-app-tailscale-community
 }
 
