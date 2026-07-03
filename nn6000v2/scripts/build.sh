@@ -125,15 +125,6 @@ modify_kernel_size() {
 
 modify_kernel_size
 
-# ... 前面的代码保持不变 ...
-
-apply_config
-fix_netfilter_kmod_clash
-remove_uhttpd_dependency
-
-modify_kernel_size
-
-
 fix_luci_pwa_icons "$BASE_PATH/../$BUILD_DIR"
 
 cd "$BASE_PATH/../$BUILD_DIR"
