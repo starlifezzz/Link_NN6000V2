@@ -32,7 +32,6 @@ source "$SCRIPT_DIR/general.sh"
 source "$SCRIPT_DIR/feeds.sh"
 source "$SCRIPT_DIR/packages.sh"
 source "$SCRIPT_DIR/system.sh"
-source "$SCRIPT_DIR/docker.sh"
 
 
 main() {
@@ -47,8 +46,6 @@ main() {
     clone_luci_tailscale
     install_feeds
     fix_smartdns_makefile
-    update_docker_stack
-    clone_dockerman
     remove_tweaked_packages
     change_dnsmasq2full
     fix_default_set
