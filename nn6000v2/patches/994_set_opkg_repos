@@ -19,52 +19,74 @@
 # EOF
 
 # echo "✓ Opkg 软件源已配置"
-#!/bin/sh
-# 配置 opkg 软件源（使用浙江大学镜像）
 
 #!/bin/sh
-# 适配 ImmortalWrt 25.12+ (apk 版本) 的浙大镜像源替换脚本
+# ============================================================================
+# /etc/uci-defaults/994_set_apk_repos
+# ImmortalWrt 25.12+ (apk 3.x) 首次启动软件源配置
+#
+# 官方依据：
+#   - ImmortalWrt imm_init 机制：system.@imm_init[0].apk_mirror
+#   - USTC 镜像帮助：https://mirrors.ustc.edu.cn/help/immortalwrt.html
+#
+# ⚠️ 注意：此脚本在首次启动时由 /etc/init.d/boot 自动执行
+#          执行成功后会自动删除（uci-defaults 标准行为）
+# ============================================================================
 
-# 1. 动态获取当前系统的版本号和架构
-VERSION=$(grep 'DISTRIB_RELEASE=' /etc/openwrt_release | cut -d "'" -f 2)
-ARCH=$(grep 'DISTRIB_ARCH=' /etc/openwrt_release | cut -d "'" -f 2)
+# ---- 配置 ----
+MIRROR_URL="https://mirrors.ustc.edu.cn/immortalwrt"
 
-# 如果获取失败，给个默认值保底 (假设你编译的是 25.12.0 或 SNAPSHOT)
-VERSION=${VERSION:-"SNAPSHOT"}
-ARCH=${ARCH:-"aarch64_cortex-a53"}
+# ---- 禁止使用 exit，避免中断后续 uci-defaults 脚本 ----
+log() { logger -t "apk-mirror" "$1"; echo "[apk-mirror] $1"; }
 
-echo "当前系统版本: $VERSION"
-echo "当前系统架构: $ARCH"
-
-# 2. 判断是 SNAPSHOT 还是 正式版 (releases)
-if [ "$VERSION" = "SNAPSHOT" ]; then
-    REPO_TYPE="snapshots"
+# ---- 第一步：设置 UCI imm_init 持久化配置 ----
+# ImmortalWrt 25.12+ 内置机制：读取 system.@imm_init[0].apk_mirror
+# 并在系统初始化时自动将 distfeeds.list 中的官方源替换为该镜像
+# 参考：https://mirrors.ustc.edu.cn/help/immortalwrt.html
+if uci show system.@imm_init[0] >/dev/null 2>&1; then
+    uci set system.@imm_init[0].apk_mirror="${MIRROR_URL}"
+    uci commit system
+    log "UCI imm_init.apk_mirror 已设置为: ${MIRROR_URL}"
 else
-    REPO_TYPE="releases"
+    # 如果 imm_init 节不存在，直接操作 distfeeds.list
+    log "imm_init 节不存在，直接修改 distfeeds.list"
+
+    REPO_FILE="/etc/apk/repositories.d/distfeeds.list"
+    if [ -f "$REPO_FILE" ]; then
+        sed -i "s|https\?://downloads\.immortalwrt\.org|${MIRROR_URL}|g" "$REPO_FILE"
+        sed -i "s|https\?://mirrors\.vsean\.net/openwrt|${MIRROR_URL}|g" "$REPO_FILE"
+        log "distfeeds.list 已更新"
+    else
+        log "⚠️ distfeeds.list 不存在，跳过"
+    fi
 fi
 
-# 浙大镜像站基础地址
-MIRROR_BASE="https://mirrors.zju.edu.cn/immortalwrt/${REPO_TYPE}/${VERSION}"
+# ---- 第二步：后台等待网络就绪后执行 apk update ----
+# 首次启动时 WAN 口可能还在 DHCP，不能阻塞等待
+(
+    # 最多等待 60 秒网络就绪
+    WAIT=0
+    while [ $WAIT -lt 60 ]; do
+        # 检查是否能解析域名
+        if ping -c1 -W2 mirrors.ustc.edu.cn >/dev/null 2>&1; then
+            break
+        fi
+        sleep 3
+        WAIT=$((WAIT + 3))
+    done
 
-# 3. 覆盖 apk 软件源列表 (注意路径变了！)
-mkdir -p /etc/apk/repositories.d
-cat > /etc/apk/repositories.d/distfeeds.list << EOF
-${MIRROR_BASE}/packages/${ARCH}/base
-${MIRROR_BASE}/packages/${ARCH}/luci
-${MIRROR_BASE}/packages/${ARCH}/packages
-${MIRROR_BASE}/packages/${ARCH}/routing
-${MIRROR_BASE}/packages/${ARCH}/telephony
-${MIRROR_BASE}/targets/qualcommax/ipq60xx/packages
-EOF
+    if [ $WAIT -ge 60 ]; then
+        log "⚠️ 等待网络超时(60s)，跳过 apk update，请稍后手动执行"
+        return 0
+    fi
 
-echo "✓ APK 软件源已更新为浙江大学镜像站"
+    # 清理缓存并更新
+    rm -rf /var/cache/apk/*
+    if apk update >/dev/null 2>&1; then
+        log "✅ APK 软件包列表更新成功"
+    else
+        log "⚠️ APK 软件包列表更新失败，请稍后手动执行: apk update"
+    fi
+) &
 
-# 4. 更新软件包列表 (命令也变了！)
-echo "正在更新软件包列表..."
-apk update
-
-if [ $? -eq 0 ]; then
-    echo "✅ APK 软件源配置成功，浙大源连接正常！"
-else
-    echo "❌ 软件源更新失败，请检查网络连接或版本号 (${VERSION}) 是否正确。"
-fi
+log "首次启动 APK 镜像源配置完成"
