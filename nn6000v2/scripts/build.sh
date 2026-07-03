@@ -143,14 +143,6 @@ if [[ $Build_Mod == "debug" ]]; then
     exit 0
 fi
 
-
-cd "$BASE_PATH/../$BUILD_DIR"
-make defconfig
-
-if [[ $Build_Mod == "debug" ]]; then
-    exit 0
-fi
-
 TARGET_DIR="$BASE_PATH/../$BUILD_DIR/bin/targets"
 if [[ -d $TARGET_DIR && "$Dev" != *"nowifi"* ]]; then
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec rm -f {} +
