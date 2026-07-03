@@ -123,7 +123,6 @@ modify_kernel_size() {
 
 modify_kernel_size
 
-
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
 
