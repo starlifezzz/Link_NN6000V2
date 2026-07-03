@@ -48,6 +48,7 @@ main() {
     install_feeds
     fix_smartdns_makefile
     update_docker_stack
+    clone_dockerman
     remove_tweaked_packages
     change_dnsmasq2full
     fix_default_set
