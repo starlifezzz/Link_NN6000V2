@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
@@ -100,7 +100,7 @@ jobs:
           fi
 
       - name: Restore Build Dependencies Cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ./action_build/.ccache
@@ -176,7 +176,7 @@ jobs:
           echo "staging: $(du -sh ./action_build/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
       - name: Save Build Dependencies Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ./action_build/.ccache
