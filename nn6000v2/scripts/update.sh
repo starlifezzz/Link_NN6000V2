@@ -45,7 +45,6 @@ main() {
     clone_lucky
     clone_easytier
     clone_luci_tailscale
-    clone_passwall
     install_feeds
     fix_smartdns_makefile
     update_docker_stack
