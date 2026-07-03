@@ -71,8 +71,8 @@ install_openwrt_packages() {
         taskd luci-lib-xterm luci-lib-taskd \
         luci-app-store quickstart luci-app-quickstart luci-app-istorex \
         smartdns luci-app-smartdns luci-theme-argon luci-app-argon-config \
-        luci-app-dockerman luci-app-quickfile \
-        luci-lib-docker luci-app-lucky luci-app-easytier \
+        luci-app-quickfile \
+        luci-app-lucky luci-app-easytier \
         luci-app-tailscale-community
 }
 
@@ -173,37 +173,6 @@ clone_diskman() {
     sed -i '/ntfs-3g-utils /d' "$path/Makefile"
 }
 
-_sync_luci_lib_docker() {
-    local repo_url="${GITHUB_BASE}lisaac/luci-lib-docker.git"
-    local luci_lib_docker_dir="$OPENWRT_PACKAGES_DIR/luci-lib-docker"
-    
-    mkdir -p "$OPENWRT_PACKAGES_DIR" || return
-    
-    rm -rf "$luci_lib_docker_dir" 2>/dev/null || true
-    if ! git clone --depth=1 "$repo_url" "$luci_lib_docker_dir"; then
-        echo "错误：从 $repo_url 克隆 luci-lib-docker 仓库失败" >&2
-        exit 1
-    fi
-    
-    echo "✓ luci-lib-docker 克隆完成"
-}
-
-clone_dockerman() {
-    local path="$OPENWRT_PACKAGES_DIR/luci-app-dockerman"
-    local repo_url="${GITHUB_BASE}wzdddyy/luci-app-dockerman.git"
-    local temp_dir="$OPENWRT_PACKAGES_DIR/dockerman"
-    
-    _sync_luci_lib_docker || return
-    
-    clone_packages "luci-app-dockerman" \
-        "$repo_url" \
-        "$temp_dir" \
-        "applications/luci-app-dockerman" \
-        "" \
-        "" \
-        "$temp_dir/applications/luci-app-dockerman" \
-        "$path"
-}
 
 clone_quickfile() {
     local QUICKFILE_DIR="$OPENWRT_PACKAGES_DIR/luci-app-quickfile"
