@@ -20,6 +20,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DEVICE_MODEL: link_nn6000v2_immwrt
   REPO_URL: https://github.com/VIKINGYFY/immortalwrt.git
@@ -41,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
@@ -100,7 +104,7 @@ jobs:
           fi
 
       - name: Restore Build Dependencies Cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v4
         with:
           path: |
             ./action_build/.ccache
@@ -122,7 +126,7 @@ jobs:
           # 设置 PPPoE 配置
           PPPOE_USER="${{ github.event.inputs.pppoe_username || '-' }}"
           PPPOE_PASS="${{ github.event.inputs.pppoe_password || '-' }}"
-          
+
           if [ "$PPPOE_USER" != "-" ] || [ "$PPPOE_PASS" != "-" ]; then
             echo "正在配置 PPPoE 账号密码..."
             sed -i "s#^PPPOE_USERNAME=.*#PPPOE_USERNAME=\"$PPPOE_USER\"#" ./nn6000v2/patches/992_network_config.sh
@@ -176,7 +180,7 @@ jobs:
           echo "staging: $(du -sh ./action_build/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
       - name: Save Build Dependencies Cache
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v4
         with:
           path: |
             ./action_build/.ccache
@@ -228,13 +232,8 @@ jobs:
           echo "=========================================="
 
           # ========== 1. 清理 Releases ==========
-          echo "所有 Releases 列表:"
-          gh release list --json tagName,createdAt --jq 'sort_by(.tagName) | reverse | .[] | {tagName: .tagName, createdAt: .createdAt}'
-          echo ""
-          
-          # 获取所有发布（保留最新的 10 个）
-          RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
-          
+          RELEASES=$(gh release list --json tagName --jq "sort_by(.tagName) | reverse | .[${{ env.KEEP_RELEASES }}:] | .[].tagName")
+
           if [ -z "$RELEASES" ]; then
             echo "无需清理 Release（保留最新 ${{ env.KEEP_RELEASES }} 个）"
           else
@@ -250,13 +249,13 @@ jobs:
           # ========== 2. 清理旧的工作流运行记录 ==========
           echo ""
           echo "清理旧的工作流运行记录..."
-          # 显示所有工作流运行记录以供调试
-          echo "所有工作流运行记录:"
-          gh run list --workflow release.yml --json name,databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[] | {name: .name, databaseId: .databaseId, createdAt: .createdAt}'
-          echo ""
-          
-          # 获取工作流运行记录，按创建时间排序，保留最新的 10 个
-          gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
+
+          # 动态获取当前工作流名称，不再硬编码文件名
+          WORKFLOW_NAME="${GITHUB_WORKFLOW}"
+          echo "当前工作流：$WORKFLOW_NAME"
+
+          gh run list --workflow "$WORKFLOW_NAME" --json databaseId,createdAt \
+            --jq "sort_by(.createdAt) | reverse | .[${{ env.KEEP_RELEASES }}:] | .[].databaseId" | while read -r run_id; do
             if [ -n "$run_id" ]; then
               echo "  删除运行记录：$run_id"
               gh run delete "$run_id" 2>/dev/null || true
