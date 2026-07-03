@@ -41,11 +41,3 @@ reset_feeds_conf() {
         git checkout $COMMIT_HASH
     fi
 }
-
-fix_luci_pwa_icons() {
-    local target_dir="$1"
-    
-    # 遍历源码目录下的 feeds 和 package，自动删除包含 "android-icon" 的行
-    find "$target_dir/feeds" "$target_dir/package" -type f \( -name "*.htm" -o -name "*.lua" -o -name "*.html" \) \
-        -exec sed -i '/android-icon/d' {} + 2>/dev/null
-}
