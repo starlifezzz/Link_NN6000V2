@@ -71,7 +71,7 @@ install_openwrt_packages() {
         taskd luci-lib-xterm luci-lib-taskd \
         luci-app-store quickstart luci-app-quickstart luci-app-istorex \
         smartdns luci-app-smartdns luci-theme-argon luci-app-argon-config \
-        luci-app-diskman luci-app-dockerman luci-app-quickfile \
+        luci-app-dockerman luci-app-quickfile \
         luci-lib-docker luci-app-lucky luci-app-easytier \
         luci-app-tailscale-community
 }
