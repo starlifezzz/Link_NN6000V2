@@ -1,21 +1,64 @@
+# #!/bin/sh
+# # 配置 opkg 软件源（使用浙江大学镜像）
+
+# # 覆盖原有软件源配置
+# cat > /etc/opkg/distfeeds.conf << 'EOF'
+# src/gz openwrt_base https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/base
+# src/gz openwrt_luci https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/luci
+# src/gz openwrt_packages https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/packages
+# src/gz openwrt_routing https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/routing
+# src/gz openwrt_telephony https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/telephony
+# EOF
+
+# # 配置 opkg.conf
+# cat > /etc/opkg.conf << 'EOF'
+# dest root /
+# dest ram /tmp
+# lists_dir ext /var/opkg-lists
+# option overlay_root /overlay
+# EOF
+
+# echo "✓ Opkg 软件源已配置"
 #!/bin/sh
 # 配置 opkg 软件源（使用浙江大学镜像）
 
-# 覆盖原有软件源配置
-cat > /etc/opkg/distfeeds.conf << 'EOF'
-src/gz openwrt_base https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/base
-src/gz openwrt_luci https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/luci
-src/gz openwrt_packages https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/packages
-src/gz openwrt_routing https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/routing
-src/gz openwrt_telephony https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/telephony
+# 1. 动态获取当前系统的版本号和架构（防止写死导致 404 或架构不匹配）
+# 例如：VERSION="24.10.2", ARCH="aarch64_cortex-a53", TARGET="qualcommax/ipq60xx"
+VERSION=$(grep 'DISTRIB_RELEASE=' /etc/openwrt_release | cut -d "'" -f 2)
+TARGET=$(grep 'DISTRIB_TARGET=' /etc/openwrt_release | cut -d "'" -f 2 | tr '/' '/')
+ARCH=$(grep 'DISTRIB_ARCH=' /etc/openwrt_release | cut -d "'" -f 2)
+
+# 如果获取失败，给个默认值保底
+VERSION=${VERSION:-"24.10.2"}
+ARCH=${ARCH:-"aarch64_cortex-a53"}
+
+echo "当前系统版本: $VERSION"
+echo "当前系统架构: $ARCH"
+
+# 浙大镜像站基础地址（注意是 mirrors 不是 mirror！）
+MIRROR_BASE="https://mirrors.zju.edu.cn/immortalwrt/releases/${VERSION}"
+
+# 2. 覆盖软件源列表 (distfeeds.conf)
+cat > /etc/opkg/distfeeds.conf << EOF
+src/gz openwrt_base ${MIRROR_BASE}/packages/${ARCH}/base
+src/gz openwrt_luci ${MIRROR_BASE}/packages/${ARCH}/luci
+src/gz openwrt_packages ${MIRROR_BASE}/packages/${ARCH}/packages
+src/gz openwrt_routing ${MIRROR_BASE}/packages/${ARCH}/routing
+src/gz openwrt_telephony ${MIRROR_BASE}/packages/${ARCH}/telephony
 EOF
 
-# 配置 opkg.conf
-cat > /etc/opkg.conf << 'EOF'
-dest root /
-dest ram /tmp
-lists_dir ext /var/opkg-lists
-option overlay_root /overlay
-EOF
+echo "✓ Opkg 软件源已更新为浙江大学镜像站"
 
-echo "✓ Opkg 软件源已配置"
+# 3. 【重要】不要覆盖 /etc/opkg.conf！
+# 如果你只是想修改 lists_dir 或其他特定选项，请用 sed 修改，而不是覆盖。
+# 默认的 /etc/opkg.conf 包含了架构定义等关键信息，覆盖会导致 opkg 罢工。
+
+# 4. 更新软件包列表
+echo "正在更新软件包列表..."
+opkg update
+
+if [ $? -eq 0 ]; then
+    echo "✅ 软件源配置成功，浙大源连接正常！"
+else
+    echo "❌ 软件源更新失败，请检查网络连接或版本号 (${VERSION}) 是否正确。"
+fi
