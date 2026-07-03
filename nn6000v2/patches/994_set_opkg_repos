@@ -39,7 +39,7 @@ MIRROR_URL="https://mirrors.ustc.edu.cn/immortalwrt"
 # ---- 禁止使用 exit，避免中断后续 uci-defaults 脚本 ----
 log() { logger -t "apk-mirror" "$1"; echo "[apk-mirror] $1"; }
 
-# ---- 第一步：设置 UCI imm_init 持久化配置 ----
+# ---- 设置 UCI imm_init 持久化配置 ----
 # ImmortalWrt 25.12+ 内置机制：读取 system.@imm_init[0].apk_mirror
 # 并在系统初始化时自动将 distfeeds.list 中的官方源替换为该镜像
 # 参考：https://mirrors.ustc.edu.cn/help/immortalwrt.html
@@ -48,44 +48,7 @@ if uci show system.@imm_init[0] >/dev/null 2>&1; then
     uci commit system
     log "UCI imm_init.apk_mirror 已设置为: ${MIRROR_URL}"
 else
-    # 如果 imm_init 节不存在，直接操作 distfeeds.list
-    log "imm_init 节不存在，直接修改 distfeeds.list"
-
-    REPO_FILE="/etc/apk/repositories.d/distfeeds.list"
-    if [ -f "$REPO_FILE" ]; then
-        sed -i "s|https\?://downloads\.immortalwrt\.org|${MIRROR_URL}|g" "$REPO_FILE"
-        sed -i "s|https\?://mirrors\.vsean\.net/openwrt|${MIRROR_URL}|g" "$REPO_FILE"
-        log "distfeeds.list 已更新"
-    else
-        log "⚠️ distfeeds.list 不存在，跳过"
-    fi
+    log "⚠️ imm_init 节不存在，跳过镜像源配置"
 fi
-
-# ---- 第二步：后台等待网络就绪后执行 apk update ----
-# 首次启动时 WAN 口可能还在 DHCP，不能阻塞等待
-(
-    # 最多等待 60 秒网络就绪
-    WAIT=0
-    while [ $WAIT -lt 60 ]; do
-        # 检查是否能解析域名
-        if ping -c1 -W2 mirrors.ustc.edu.cn >/dev/null 2>&1; then
-            break
-        fi
-        sleep 3
-        WAIT=$((WAIT + 3))
-    done
-
-    if [ $WAIT -ge 60 ]; then
-        log "⚠️ 等待网络超时(60s)，跳过 apk update，请稍后手动执行"
-        exit 0    # ← 子 shell 里用 exit，不是 return
-    fi
-    # 清理缓存并更新
-    rm -rf /var/cache/apk/*
-    if apk update >/dev/null 2>&1; then
-        log "✅ APK 软件包列表更新成功"
-    else
-        log "⚠️ APK 软件包列表更新失败，请稍后手动执行: apk update"
-    fi
-) &
 
 log "首次启动 APK 镜像源配置完成"
