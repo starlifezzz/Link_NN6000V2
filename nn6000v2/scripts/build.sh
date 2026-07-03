@@ -123,15 +123,6 @@ modify_kernel_size() {
 
 modify_kernel_size
 
-fix_luci_pwa_icons() {
-    local target_dir="$1"
-    echo "🩺 正在清理 LuCI 主题的无效 PWA 图标引用..."
-    find "$target_dir/feeds" "$target_dir/package" -type f \( -name "*.htm" -o -name "*.lua" -o -name "*.html" \) \
-        -exec sed -i '/android-icon/d' {} + 2>/dev/null
-    echo "✅ PWA 图标引用已清理完毕！"
-}
-
-fix_luci_pwa_icons "$BASE_PATH/../$BUILD_DIR"
 
 cd "$BASE_PATH/../$BUILD_DIR"
 make defconfig
