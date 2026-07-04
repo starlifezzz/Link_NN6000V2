@@ -27,18 +27,15 @@ PPPOE_PASSWORD="-"
 board_name=$(cat /tmp/sysinfo/board_name 2>/dev/null)
 
 configure_wifi() {
-	local radio=$1
-	local band=$2
-	local channel=$3
-	local htmode=$4
-	local txpower=$5
-	local ssid=$6
-	local key=$7
+	local radio=$1 band=$2 channel=$3 htmode=$4
+	local txpower=$5 ssid=$6 key=$7
 	local encryption=${8:-"psk2+ccmp"}
-	local now_encryption=$(uci get wireless.default_radio${radio}.encryption 2>/dev/null)
+	local now_encryption=$(uci -q get wireless.default_radio${radio}.encryption)
+
 	if [ -n "$now_encryption" ] && [ "$now_encryption" != "none" ]; then
-		return 0
+		return 1  # 返回 1 表示"已配置，跳过"
 	fi
+
 	uci -q batch <<EOF
 set wireless.radio${radio}.band="${band}"
 set wireless.radio${radio}.channel="${channel}"
@@ -58,17 +55,26 @@ set wireless.default_radio${radio}.bss_transition='1'
 set wireless.default_radio${radio}.wnm_sleep_mode='1'
 set wireless.default_radio${radio}.wnm_sleep_mode_no_keys='1'
 EOF
+	return 0  # 返回 0 表示"新配置了"
 }
 
 link_nn6000v2_wifi_cfg() {
-	configure_wifi 0 '5g' $WIFI_5G_CHANNEL 'HE80' $WIFI_5G_TXPOWER "$WIFI_5G_SSID" "$WIFI_5G_KEY"
-	configure_wifi 1 '2g' $WIFI_2G_CHANNEL 'HT20' $WIFI_2G_TXPOWER "$WIFI_2G_SSID" "$WIFI_2G_KEY"
+	local changed=0
+	configure_wifi 0 '5g' $WIFI_5G_CHANNEL 'HE80' $WIFI_5G_TXPOWER "$WIFI_5G_SSID" "$WIFI_5G_KEY" && changed=1
+	configure_wifi 1 '2g' $WIFI_2G_CHANNEL 'HT20' $WIFI_2G_TXPOWER "$WIFI_2G_SSID" "$WIFI_2G_KEY" && changed=1
+
+	if [ "$changed" -eq 1 ]; then
+		uci commit wireless
+		return 0  # 有改动
+	fi
+	return 1  # 无改动
 }
 
+# 返回值：0=修改了配置需要重启, 1=跳过无需重启
 setup_pppoe() {
 	if [ "$PPPOE_USERNAME" = "-" ] || [ "$PPPOE_PASSWORD" = "-" ]; then
 		echo "PPPoE: 使用占位符，跳过配置"
-		return 0
+		return 1
 	fi
 
 	if [ ! -f /etc/config/network ]; then
@@ -82,7 +88,7 @@ setup_pppoe() {
 
 	if [ "$wan_proto" = "pppoe" ] && [ "$wan_username" != "-" ] && [ "$wan_password" != "-" ]; then
 		echo "PPPoE: 已配置有效账号，跳过"
-		return 0
+		return 1
 	fi
 
 	uci -q batch <<EOF
@@ -93,22 +99,27 @@ set network.wan.keepalive='5 3'
 set network.wan.demand='0'
 EOF
 
+	# PPPoE 场景下删除 config_generate 自动生成的 wan6
+	# netifd 会自动派生绑定到 pppoe-wan 的 wan_6
+	uci -q delete network.wan6
+
 	uci commit network
 	echo "PPPoE: 配置完成 - 用户名: ${PPPOE_USERNAME}"
+	return 0
 }
 
+# ==================== 主流程 ====================
 need_restart=0
 
 case "${board_name}" in
 link,nn6000-v2)
-	link_nn6000v2_wifi_cfg
-	uci commit wireless
-	need_restart=1
+	link_nn6000v2_wifi_cfg && need_restart=1
 	;;
 esac
 
-setup_pppoe
+setup_pppoe && need_restart=1
 
 if [ "$need_restart" -eq 1 ]; then
+	echo "配置已更改，正在重启网络..."
 	/etc/init.d/network restart
 fi
