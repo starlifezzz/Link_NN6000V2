@@ -25,8 +25,13 @@ if [[ ! -f $CONFIG_FILE ]]; then
 fi
 
 # Use environment variables or defaults for repo config
-REPO_URL=${REPO_URL:-https://github.com/VIKINGYFY/immortalwrt.git}
-REPO_BRANCH=${REPO_BRANCH:-main}
+# REPO_URL=${REPO_URL:-https://github.com/VIKINGYFY/immortalwrt.git}
+# REPO_BRANCH=${REPO_BRANCH:-main}
+
+# 改为官方仓库
+REPO_URL=${REPO_URL:-https://github.com/immortalwrt/immortalwrt.git}
+REPO_BRANCH=${REPO_BRANCH:-master}
+
 BUILD_DIR=${BUILD_DIR:-imm-nss}
 COMMIT_HASH=${COMMIT_HASH:-none}
 
@@ -111,13 +116,33 @@ fix_netfilter_kmod_clash
 remove_uhttpd_dependency
 
 # Modify kernel size to 12MB for ipq60xx devices
+# modify_kernel_size() {
+#     local ipq60xx_mk_path="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/image/ipq60xx.mk"
+    
+#     if [ -f "$ipq60xx_mk_path" ]; then
+#         # Change KERNEL_SIZE from 6144k to 12288k for link_nn6000 devices
+#         sed -i '/link_nn6000-common/,/endef/{s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/g}' "$ipq60xx_mk_path"
+#         echo "Updated KERNEL_SIZE to 12288k (12MB) for link_nn6000 devices"
+#     fi
+# }
+
+# 适配imwrt官方
 modify_kernel_size() {
     local ipq60xx_mk_path="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/image/ipq60xx.mk"
     
     if [ -f "$ipq60xx_mk_path" ]; then
-        # Change KERNEL_SIZE from 6144k to 12288k for link_nn6000 devices
-        sed -i '/link_nn6000-common/,/endef/{s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/g}' "$ipq60xx_mk_path"
-        echo "Updated KERNEL_SIZE to 12288k (12MB) for link_nn6000 devices"
+        # 更灵活的正则，处理 endef 前可能有空格的情况
+        sed -i '/define Device\/link_nn6000-v[12]/,/^[[:space:]]*endef[[:space:]]*$/{s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/}' "$ipq60xx_mk_path"
+        
+        # 验证修改是否成功
+        if grep -q "link_nn6000-v[12]" "$ipq60xx_mk_path" && grep -q "KERNEL_SIZE := 12288k" "$ipq60xx_mk_path"; then
+            echo "✓ Updated KERNEL_SIZE to 12288k (12MB) for link_nn6000 devices"
+        else
+            echo "✗ Warning: KERNEL_SIZE update may have failed, please verify manually"
+        fi
+    else
+        echo "✗ Error: ipq60xx.mk not found at $ipq60xx_mk_path"
+        return 1
     fi
 }
 
