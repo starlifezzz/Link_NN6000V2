@@ -35,20 +35,48 @@
 
 # ---- 配置 ----
 MIRROR_URL="https://mirrors.ustc.edu.cn/immortalwrt"
+DISTFEEDS="/etc/apk/repositories.d/distfeeds.list"
 
 # ---- 禁止使用 exit，避免中断后续 uci-defaults 脚本 ----
 log() { logger -t "apk-mirror" "$1"; echo "[apk-mirror] $1"; }
 
-# ---- 设置 UCI imm_init 持久化配置 ----
-# ImmortalWrt 25.12+ 内置机制：读取 system.@imm_init[0].apk_mirror
-# 并在系统初始化时自动将 distfeeds.list 中的官方源替换为该镜像
-# 参考：https://mirrors.ustc.edu.cn/help/immortalwrt.html
+# ---- 1. 设置 UCI imm_init 持久化配置（sysupgrade 后可保留） ----
 if uci show system.@imm_init[0] >/dev/null 2>&1; then
     uci set system.@imm_init[0].apk_mirror="${MIRROR_URL}"
     uci commit system
     log "UCI imm_init.apk_mirror 已设置为: ${MIRROR_URL}"
 else
-    log "⚠️ imm_init 节不存在，跳过镜像源配置"
+    log "⚠️ imm_init 节不存在，跳过 UCI 配置"
+fi
+
+# ---- 2. 直接修改 distfeeds.list ----
+if [ -f "${DISTFEEDS}" ]; then
+    # 2a. 替换镜像源地址（兼容官方源 / 其他镜像源 → USTC）
+    sed -i "s|https://downloads.immortalwrt.org|${MIRROR_URL}|g" "${DISTFEEDS}"
+    sed -i "s|https://mirrors.vsean.net/openwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
+    sed -i "s|https://mirrors.tuna.tsinghua.edu.cn/immortalwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
+    sed -i "s|https://mirror.nju.edu.cn/immortalwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
+    log "镜像地址已替换为: ${MIRROR_URL}"
+
+    # 2b. 注释掉当前架构下不存在 / 404 的软件源
+    #     openwrt_packages: 部分架构未构建
+    #     video: 路由器架构无视频包
+    sed -i '/openwrt_packages/s/^[^#]/# &/' "${DISTFEEDS}"
+    sed -i '/\/video\//s/^[^#]/# &/' "${DISTFEEDS}"
+    log "已注释掉不可用的 openwrt_packages 和 video 源"
+else
+    log "⚠️ ${DISTFEEDS} 不存在，跳过修改"
+fi
+
+# ---- 3. 验证 ----
+if [ -f "${DISTFEEDS}" ]; then
+    log "最终源配置："
+    grep -v '^#' "${DISTFEEDS}" | grep -v '^$' | while read -r line; do
+        log "  ✅ ${line}"
+    done
+    grep '^#' "${DISTFEEDS}" | grep -E 'openwrt_packages|video' | while read -r line; do
+        log "  🚫 ${line}"
+    done
 fi
 
 log "首次启动 APK 镜像源配置完成"
