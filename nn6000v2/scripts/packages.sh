@@ -111,28 +111,6 @@ clone_lucky() {
         sed -i "s/option enabled '1'/option enabled '0'/g" "$lucky_conf"
         sed -i "s/option logger '1'/option logger '0'/g" "$lucky_conf"
     fi
-    
-    local version
-    version=$(find "$BASE_PATH/patches" -name "lucky_*.tar.gz" -printf "%f\n" | head -n 1 | sed -n 's/^lucky_\(.*\)_Linux.*$/\1/p')
-    if [ -z "$version" ]; then
-        echo "Warning: 未找到 lucky 补丁文件，跳过更新。" >&2
-        return 0
-    fi
-    
-    local makefile_path="$LUCKY_DIR/Makefile"
-    if [ ! -f "$makefile_path" ]; then
-        echo "Warning: lucky Makefile not found. Skipping." >&2
-        return 0
-    fi
-    
-    local patch_line="\\t[ -f \$(TOPDIR)/../nn6000v2/patches/lucky_${version}_Linux_\$(LUCKY_ARCH)_wanji.tar.gz ] && install -Dm644 \$(TOPDIR)/../nn6000v2/patches/lucky_${version}_Linux_\$(LUCKY_ARCH)_wanji.tar.gz \$(PKG_BUILD_DIR)/\$(PKG_NAME)_\$(PKG_VERSION)_Linux_\$(LUCKY_ARCH).tar.gz"
-    
-    if grep -q "Build/Prepare" "$makefile_path"; then
-        sed -i "/Build\\/Prepare/a\\$patch_line" "$makefile_path"
-        sed -i '/wget/d' "$makefile_path"
-    else
-        echo "Warning: lucky Makefile 中未找到 'Build/Prepare'。跳过。" >&2
-    fi
 }
 
 

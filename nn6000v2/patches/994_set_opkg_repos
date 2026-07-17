@@ -1,25 +1,3 @@
-# #!/bin/sh
-# # 配置 opkg 软件源（使用浙江大学镜像）
-
-# # 覆盖原有软件源配置
-# cat > /etc/opkg/distfeeds.conf << 'EOF'
-# src/gz openwrt_base https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/base
-# src/gz openwrt_luci https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/luci
-# src/gz openwrt_packages https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/packages
-# src/gz openwrt_routing https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/routing
-# src/gz openwrt_telephony https://mirror.zju.edu.cn/immortalwrt/releases/24.10.5/packages/aarch64_cortex-a53/telephony
-# EOF
-
-# # 配置 opkg.conf
-# cat > /etc/opkg.conf << 'EOF'
-# dest root /
-# dest ram /tmp
-# lists_dir ext /var/opkg-lists
-# option overlay_root /overlay
-# EOF
-
-# echo "✓ Opkg 软件源已配置"
-
 #!/bin/sh
 # ============================================================================
 # /etc/uci-defaults/994_set_apk_repos
@@ -33,50 +11,83 @@
 #          执行成功后会自动删除（uci-defaults 标准行为）
 # ============================================================================
 
-# ---- 配置 ----
 MIRROR_URL="https://mirrors.ustc.edu.cn/immortalwrt"
 DISTFEEDS="/etc/apk/repositories.d/distfeeds.list"
+TMP_FEEDS="/tmp/distfeeds.list.new"
 
-# ---- 禁止使用 exit，避免中断后续 uci-defaults 脚本 ----
+# ---- 工具函数 ----
 log() { logger -t "apk-mirror" "$1"; echo "[apk-mirror] $1"; }
 
-# ---- 1. 设置 UCI imm_init 持久化配置（sysupgrade 后可保留） ----
+# ---- 1. UCI 持久化配置 (sysupgrade 后可保留) ----
 if uci show system.@imm_init[0] >/dev/null 2>&1; then
     uci set system.@imm_init[0].apk_mirror="${MIRROR_URL}"
     uci commit system
-    log "UCI imm_init.apk_mirror 已设置为: ${MIRROR_URL}"
+    log "UCI imm_init.apk_mirror = ${MIRROR_URL}"
 else
     log "⚠️ imm_init 节不存在，跳过 UCI 配置"
 fi
 
-# ---- 2. 直接修改 distfeeds.list ----
-if [ -f "${DISTFEEDS}" ]; then
-    # 2a. 替换镜像源地址（兼容官方源 / 其他镜像源 → USTC）
-    sed -i "s|https://downloads.immortalwrt.org|${MIRROR_URL}|g" "${DISTFEEDS}"
-    sed -i "s|https://mirrors.vsean.net/openwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
-    sed -i "s|https://mirrors.tuna.tsinghua.edu.cn/immortalwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
-    sed -i "s|https://mirror.nju.edu.cn/immortalwrt|${MIRROR_URL}|g" "${DISTFEEDS}"
-    log "镜像地址已替换为: ${MIRROR_URL}"
-
-    # 2b. 注释掉当前架构下不存在 / 404 的软件源
-    #     openwrt_packages: 部分架构未构建
-    #     video: 路由器架构无视频包
-    sed -i '/openwrt_packages/s/^[^#]/# &/' "${DISTFEEDS}"
-    sed -i '/\/video\//s/^[^#]/# &/' "${DISTFEEDS}"
-    log "已注释掉不可用的 openwrt_packages 和 video 源"
-else
-    log "⚠️ ${DISTFEEDS} 不存在，跳过修改"
+# ---- 2. 构建新的 distfeeds.list ----
+if [ ! -f "${DISTFEEDS}" ]; then
+    log "⚠️ ${DISTFEEDS} 不存在，跳过"
+    return 0 2>/dev/null || exit 0
 fi
+
+cp "${DISTFEEDS}" "${DISTFEEDS}.bak"
+> "${TMP_FEEDS}"
+
+# 定义所有已知的 ImmortalWrt 镜像前缀（含官方源）
+OLD_MIRRORS="https://downloads.immortalwrt.org|https://mirrors.vsean.net/openwrt|https://mirrors.tuna.tsinghua.edu.cn/immortalwrt|https://mirror.nju.edu.cn/immortalwrt|https://mirrors.sustech.edu.cn/immortalwrt"
+
+while IFS= read -r line; do
+    # 跳过空行和注释行，原样保留
+    case "$line" in
+        ""|\#*) echo "$line" >> "${TMP_FEEDS}"; continue ;;
+    esac
+
+    # ---- 2a. 替换 ImmortalWrt 镜像源 ----
+    new_line=$(echo "$line" | sed -E "s|(${OLD_MIRRORS})|${MIRROR_URL}|g")
+
+    # ---- 2b. 跳过已知不可用的 feed ----
+    # openwrt_packages: ImmortalWrt 官方未构建此 feed (实测 404)
+    # 仅跳过 ImmortalWrt 域名下的 openwrt_packages（其他源的可能可用）
+    case "$new_line" in
+        *immortalwrt*openwrt_packages*)
+            log "🚫 跳过: openwrt_packages (ImmortalWrt 无此 feed)"
+            echo "# [disabled] ${new_line}" >> "${TMP_FEEDS}"
+            continue
+            ;;
+        *immortalwrt*/video/*)
+            log "🚫 跳过: video (ImmortalWrt 无此 feed)"
+            echo "# [disabled] ${new_line}" >> "${TMP_FEEDS}"
+            continue
+            ;;
+    esac
+
+    echo "$new_line" >> "${TMP_FEEDS}"
+done < "${DISTFEEDS}"
+
+cp "${TMP_FEEDS}" "${DISTFEEDS}"
+rm -f "${TMP_FEEDS}"
+
+log "镜像源替换完成"
 
 # ---- 3. 验证 ----
-if [ -f "${DISTFEEDS}" ]; then
-    log "最终源配置："
-    grep -v '^#' "${DISTFEEDS}" | grep -v '^$' | while read -r line; do
-        log "  ✅ ${line}"
-    done
-    grep '^#' "${DISTFEEDS}" | grep -E 'openwrt_packages|video' | while read -r line; do
-        log "  🚫 ${line}"
-    done
+log "最终源配置："
+grep -v '^#' "${DISTFEEDS}" | grep -v '^$' | while read -r line; do
+    log "  ✅ ${line}"
+done
+grep '^\#.*disabled' "${DISTFEEDS}" | while read -r line; do
+    log "  🚫 ${line}"
+done
+
+# ---- 4. 执行 apk update 并检查结果 ----
+log "执行 apk update..."
+if apk update 2>&1 | tail -1 | grep -q "OK"; then
+    pkg_count=$(apk update 2>&1 | grep -o '[0-9]* distinct packages' | grep -o '[0-9]*')
+    log "✅ 更新成功，可用包数: ${pkg_count}"
+else
+    log "⚠️ apk update 存在问题，请手动检查"
 fi
 
-log "首次启动 APK 镜像源配置完成"
+log "APK 镜像源配置完成"
