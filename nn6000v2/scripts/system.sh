@@ -403,6 +403,17 @@ config server 'http_only'
 EOF
     fi
 
+    # 静默处理 quickstart 缺失图标请求（返回 204，避免 nginx error log 刷屏）
+    local nginx_quickstart_loc="$BUILD_DIR/feeds/packages/net/nginx-util/files/quickstart_icons.location"
+    if [ -d "$(dirname "$nginx_quickstart_loc")" ]; then
+        cat >"$nginx_quickstart_loc" <<'NGX'
+location ~* ^/android-icon-.*\.png$ {
+    return 204;
+}
+NGX
+        echo "已添加 quickstart 图标静默处理规则"
+    fi
+
     local nginx_template="$BUILD_DIR/feeds/packages/net/nginx-util/files/uci.conf.template"
     if [ -f "$nginx_template" ]; then
         if ! grep -q "client_body_in_file_only clean;" "$nginx_template"; then
@@ -440,18 +451,6 @@ remove_tweaked_packages() {
     if [ -f "$target_mk" ]; then
         if grep -q "^DEFAULT_PACKAGES += \$(DEFAULT_PACKAGES.tweak)" "$target_mk"; then
             sed -i 's/DEFAULT_PACKAGES += $(DEFAULT_PACKAGES.tweak)/# DEFAULT_PACKAGES += $(DEFAULT_PACKAGES.tweak)/g' "$target_mk"
-        fi
-    fi
-}
-
-fix_quickstart() {
-    local file_path="$BUILD_DIR/feeds/openwrt_packages/luci-app-quickstart/luasrc/controller/istore_backend.lua"
-    local url="https://gist.githubusercontent.com/puteulanus/1c180fae6bccd25e57eb6d30b7aa28aa/raw/istore_backend.lua"
-    if [ -f "$file_path" ]; then
-        echo "正在修复 quickstart..."
-        if ! curl -fsSL -o "$file_path" "$url"; then
-            echo "错误：从 $url 下载 istore_backend.lua 失败" >&2
-            exit 1
         fi
     fi
 }

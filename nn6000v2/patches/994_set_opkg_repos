@@ -49,6 +49,15 @@ while IFS= read -r line; do
     new_line=$(echo "$line" | sed -E "s|(${OLD_MIRRORS})|${MIRROR_URL}|g")
 
     # ---- 2b. 跳过已知不可用的 feed ----
+    # istoreos: iStoreOS 兼容源，ImmortalWrt 中使用会报错
+    case "$new_line" in
+        *istoreos*)
+            log "🚫 跳过: iStoreOS 源 (ImmortalWrt 不兼容)"
+            echo "# [disabled] ${new_line}" >> "${TMP_FEEDS}"
+            continue
+            ;;
+    esac
+
     # openwrt_packages: ImmortalWrt 官方未构建此 feed (实测 404)
     # 仅跳过 ImmortalWrt 域名下的 openwrt_packages（其他源的可能可用）
     case "$new_line" in
