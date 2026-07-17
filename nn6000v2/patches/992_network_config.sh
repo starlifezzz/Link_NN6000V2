@@ -108,12 +108,24 @@ EOF
 	return 0
 }
 
+# ==================== WiFi 检测 ====================
+# 无 WiFi 版（ath11k kmod 未加载）跳过 WiFi 配置
+detect_wifi() {
+	[ -d "/sys/kernel/debug/ieee80211/phy0" ] && return 0
+	[ -d "/sys/kernel/debug/ieee80211/phy1" ] && return 0
+	return 1
+}
+
 # ==================== 主流程 ====================
 need_restart=0
 
 case "${board_name}" in
 link,nn6000-v2)
-	link_nn6000v2_wifi_cfg && need_restart=1
+	if detect_wifi; then
+		link_nn6000v2_wifi_cfg && need_restart=1
+	else
+		echo "未检测到 WiFi 设备，跳过 WiFi 配置"
+	fi
 	;;
 esac
 
