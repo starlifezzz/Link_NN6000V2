@@ -117,11 +117,6 @@ EOF
 }
 
 apply_passwall_tweaks() {
-    local chnlist_path="$BUILD_DIR/feeds/passwall/luci-app-passwall/root/usr/share/passwall/rules/chnlist"
-    if [ -f "$chnlist_path" ]; then
-        >"$chnlist_path"
-    fi
-
     local xray_util_path="$BUILD_DIR/feeds/passwall/luci-app-passwall/luasrc/passwall/util_xray.lua"
     if [ -f "$xray_util_path" ]; then
         sed -i 's/maxRTT = "1s"/maxRTT = "2s"/g' "$xray_util_path"
@@ -134,13 +129,6 @@ update_nss_pbuf_performance() {
     if [ -d "$(dirname "$pbuf_path")" ] && [ -f $pbuf_path ]; then
         sed -i "s/auto_scale '1'/auto_scale 'off'/g" $pbuf_path
         sed -i "s/scaling_governor 'performance'/scaling_governor 'schedutil'/g" $pbuf_path
-    fi
-}
-
-set_build_signature() {
-    local file="$BUILD_DIR/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
-    if [ -d "$(dirname "$file")" ] && [ -f $file ]; then
-        sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ build by TheJoker')/g" "$file"
     fi
 }
 
@@ -270,14 +258,6 @@ fix_openssl_ktls() {
         echo "正在更新 OpenSSL kTLS 配置..."
         sed -i 's/select PACKAGE_kmod-tls/depends on PACKAGE_kmod-tls/g' "$config_in"
         sed -i '/depends on PACKAGE_kmod-tls/a\\tdefault y if PACKAGE_kmod-tls' "$config_in"
-    fi
-}
-
-fix_opkg_check() {
-    local patch_file="$BASE_PATH/patches/001-fix-provides-version-parsing.patch"
-    local opkg_dir="$BUILD_DIR/package/system/opkg"
-    if [ -f "$patch_file" ]; then
-        install -Dm644 "$patch_file" "$opkg_dir/patches/001-fix-provides-version-parsing.patch"
     fi
 }
 
