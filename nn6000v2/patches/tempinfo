@@ -2,9 +2,17 @@
 # 获取CPU温度
 cpu_temp=$(cat /sys/devices/virtual/thermal/thermal_zone0/hwmon0/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
 
-# 获取WiFi温度（分别读取5GHz和2.4GHz）
-wifi5_temp=$(cat /sys/devices/platform/soc@0/c000000.wifi/ieee80211/phy0/hwmon*/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
-wifi2_temp=$(cat /sys/devices/platform/soc@0/c000000.wifi/ieee80211/phy1/hwmon*/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
+# 获取WiFi温度（仅当 WiFi 存在时读取；无 WiFi 版自动跳过）
+wifi5_temp=""
+wifi2_temp=""
+
+if [ -d "/sys/kernel/debug/ieee80211/phy0" ]; then
+    wifi5_temp=$(cat /sys/devices/platform/soc@0/c000000.wifi/ieee80211/phy0/hwmon*/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
+fi
+
+if [ -d "/sys/kernel/debug/ieee80211/phy1" ]; then
+    wifi2_temp=$(cat /sys/devices/platform/soc@0/c000000.wifi/ieee80211/phy1/hwmon*/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
+fi
 
 # 输出结果
 if [ -n "$cpu_temp" ]; then
