@@ -27,11 +27,9 @@ env:
   BUILD_DIR: imm-nss
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   KEEP_RELEASES: 3  # 保留最新几个 Release，方便回滚
-  KEEP_RELEASES: 3  # 保留最新几个 Release，方便回滚
 
 jobs:
   build:
-    timeout-minutes: 180
     timeout-minutes: 180
     permissions:
       actions: write
@@ -56,18 +54,6 @@ jobs:
           docker-images: true
           swap-storage: true
 
-        uses: actions/checkout@v4
-
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
 
       - name: Build System Setup
         run: |
@@ -128,7 +114,6 @@ jobs:
           fi
 
       - name: Restore Build Dependencies Cache
-        uses: actions/cache/restore@v4
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -214,7 +199,6 @@ jobs:
 
       - name: Save Build Dependencies Cache
         uses: actions/cache/save@v4
-        uses: actions/cache/save@v4
         with:
           path: |
             ./action_build/.ccache
@@ -243,7 +227,6 @@ jobs:
           } > release_body.txt
 
       - name: Release Firmware
-        uses: softprops/action-gh-release@v2
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.BUILD_DATE }}_${{ env.DEVICE_MODEL }}
