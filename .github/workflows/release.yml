@@ -2,6 +2,15 @@ name: Go_Release
 
 on:
   workflow_dispatch:
+    inputs:
+      pppoe_username:
+        description: 'PPPoE 宽带账号 (留空使用默认值 "-")'
+        required: false
+        default: '-'
+      pppoe_password:
+        description: 'PPPoE 宽带密码 (留空使用默认值 "-")'
+        required: false
+        default: '-'
   schedule:
     # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
     # UTC 20:00 = 北京时间 04:00
@@ -109,21 +118,19 @@ jobs:
           fi
 
       - name: Build Firmware
-        env:
-          PPPOE_USERNAME: ${{ secrets.PPPOE_USERNAME }}
-          PPPOE_PASSWORD: ${{ secrets.PPPOE_PASSWORD }}
         run: |
-          # 设置 PPPoE 配置（从 GitHub Secrets 读取）
-          PPPOE_USER="${PPPOE_USERNAME:--}"
-          PPPOE_PASS="${PPPOE_PASSWORD:--}"
+          # 设置 PPPoE 配置
+          PPPOE_USER="${{ github.event.inputs.pppoe_username || '-' }}"
+          PPPOE_PASS="${{ github.event.inputs.pppoe_password || '-' }}"
           
           if [ "$PPPOE_USER" != "-" ] || [ "$PPPOE_PASS" != "-" ]; then
             echo "正在配置 PPPoE 账号密码..."
             sed -i "s#^PPPOE_USERNAME=.*#PPPOE_USERNAME=\"$PPPOE_USER\"#" ./nn6000v2/patches/992_network_config.sh
             sed -i "s#^PPPOE_PASSWORD=.*#PPPOE_PASSWORD=\"$PPPOE_PASS\"#" ./nn6000v2/patches/992_network_config.sh
-            echo "PPPoE 账号密码已配置（内容已隐藏）"
+            echo "PPPoE Username: $PPPOE_USER"
+            echo "PPPoE Password: [HIDDEN]"
           else
-            echo "未配置 PPPoE Secrets，使用默认值 '-'"
+            echo "未输入 PPPoE 账号密码，使用默认值 '-'"
           fi
 
           ./nn6000v2/scripts/build.sh ${{ env.DEVICE_MODEL }}
