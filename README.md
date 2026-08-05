@@ -30,7 +30,6 @@
 | ------------------------ | ------------- |
 | **luci-app-argon**       | Argon 主题      |
 | **luci-app-istorex**     | 应用商店          |
-| **luci-app-dockerman**   | Docker        |
 | **luci-app-smartdns**    | DNS 加速        |
 | **luci-app-autoreboot**  | 定时重启          |
 | **luci-app-sqm**         | QoS 智能队列      |
