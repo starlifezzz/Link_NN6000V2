@@ -15,7 +15,7 @@ on:
     # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
     # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
     # UTC 20:00 = 北京时间 04:00
-    - cron: '0 20 */3 * *'
+    - cron: '0 20 */7 * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -229,8 +229,13 @@ jobs:
           echo "=========================================="
 
           # ========== 1. 清理 Releases ==========
-          RELEASES=$(gh release list --json tagName --jq "sort_by(.tagName) | reverse | .[${{ env.KEEP_RELEASES }}:] | .[].tagName")
-
+          echo "所有 Releases 列表:"
+          gh release list --json tagName,createdAt --jq 'sort_by(.tagName) | reverse | .[] | {tagName: .tagName, createdAt: .createdAt}'
+          echo ""
+          
+          # 获取所有发布（保留最新的 10 个）
+          RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
+          
           if [ -z "$RELEASES" ]; then
             echo "无需清理 Release（保留最新 ${{ env.KEEP_RELEASES }} 个）"
           else
@@ -246,13 +251,13 @@ jobs:
           # ========== 2. 清理旧的工作流运行记录 ==========
           echo ""
           echo "清理旧的工作流运行记录..."
-
-          # 动态获取当前工作流名称，不再硬编码文件名
-          WORKFLOW_NAME="${GITHUB_WORKFLOW}"
-          echo "当前工作流：$WORKFLOW_NAME"
-
-          gh run list --workflow "$WORKFLOW_NAME" --json databaseId,createdAt \
-            --jq "sort_by(.createdAt) | reverse | .[${{ env.KEEP_RELEASES }}:] | .[].databaseId" | while read -r run_id; do
+          # 显示所有工作流运行记录以供调试
+          echo "所有工作流运行记录:"
+          gh run list --workflow release.yml --json name,databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[] | {name: .name, databaseId: .databaseId, createdAt: .createdAt}'
+          echo ""
+          
+          # 获取工作流运行记录，按创建时间排序，保留最新的 10 个
+          gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
             if [ -n "$run_id" ]; then
               echo "  删除运行记录：$run_id"
               gh run delete "$run_id" 2>/dev/null || true
