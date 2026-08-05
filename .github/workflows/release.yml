@@ -13,13 +13,8 @@ on:
         default: '-'
   schedule:
     # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
-    # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
     # UTC 20:00 = 北京时间 04:00
     - cron: '0 20 */7 * *'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   DEVICE_MODEL: link_nn6000v2_immwrt
@@ -235,6 +230,8 @@ jobs:
           
           # 获取所有发布（保留最新的 10 个）
           RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
+          # 获取所有发布（保留最新的 10 个）
+          RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
           
           if [ -z "$RELEASES" ]; then
             echo "无需清理 Release（保留最新 ${{ env.KEEP_RELEASES }} 个）"
@@ -256,6 +253,8 @@ jobs:
           gh run list --workflow release.yml --json name,databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[] | {name: .name, databaseId: .databaseId, createdAt: .createdAt}'
           echo ""
           
+          # 获取工作流运行记录，按创建时间排序，保留最新的 10 个
+          gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
           # 获取工作流运行记录，按创建时间排序，保留最新的 10 个
           gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
             if [ -n "$run_id" ]; then
