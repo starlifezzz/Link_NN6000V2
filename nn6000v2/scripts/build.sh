@@ -111,6 +111,13 @@ fi
 
 "$BASE_PATH/scripts/update.sh" "$REPO_URL" "$REPO_BRANCH" "$BUILD_DIR" "$COMMIT_HASH"
 
+# 清理 gettext 缓存和构建文件
+if [ -d "$BASE_PATH/../$BUILD_DIR/build_dir/hostpkg/gettext-1.0" ]; then
+    echo "清理旧的 gettext 构建文件..."
+    rm -rf "$BASE_PATH/../$BUILD_DIR/build_dir/hostpkg/gettext-1.0"
+    rm -f "$BASE_PATH/../$BUILD_DIR/staging_dir/hostpkg/stamp/.package_*.gettext*"
+fi
+
 apply_config
 fix_netfilter_kmod_clash
 remove_uhttpd_dependency
