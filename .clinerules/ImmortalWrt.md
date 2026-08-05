@@ -100,3 +100,12 @@ ImmortalWrt/OpenWrt 固件开发问题的主要知识来源：
    ❌ 不得在编译时下载外部文件替代上游源码
    ✅ 如需修改上游行为，应优先提交 PR 到上游仓库
    ✅ 如需临时 workaround，必须注释说明原因和预期移除条件
+
+10. 【刷入该项目的硬件参数】
+   主机名	ImmortalWRT
+   型号	Link NN6000 v2
+   架构	ARMv8 Processor rev 4 (v8l) x 4 (1512.0MHz)
+   温度	CPU: 51.0°C
+   目标平台	qualcommax/ipq60xx
+   固件版本	ImmortalWRT SNAPSHOT r0-30e2876 / LuCI Master 26.188.75359~d2afa60 / build by TheJoker
+   内核版本	6.18.38
