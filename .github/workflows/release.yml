@@ -16,6 +16,8 @@ on:
         type: boolean
         default: false
   schedule:
+    # 每 7 天编译一次（UTC 时间，北京时间 = UTC+8）
+    # UTC 20:00 = 北京时间 04:00
     - cron: '0 20 */7 * *'
 
 env:
@@ -32,42 +34,55 @@ jobs:
       contents: write
     strategy:
       matrix:
-        os: [ubuntu-24.04]
+        os: [ubuntu-24.04] # 保持 24.04，因为上游脚本现在主要适配新版
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
-
+      
       - name: Build System Setup
         run: |
           echo "=== Disk Space Before Cleanup ==="
           df -h
-
+          
+          # 1. 清理预装软件，释放空间
           sudo apt-get purge -y \
             dotnet* ghc* libboost* android* swift* \
             chromium* chrome* firefox* ffmpeg* \
             powershell* codeql* microsoft* || true
-
+          
           sudo apt-get autoremove -y --purge
           sudo docker system prune -a -f 2>/dev/null || true
           sudo rm -rf /var/lib/apt/lists/*
-
+          
           echo "=== Disk Space After Cleanup ==="
           df -h
-
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-
+          
+          # 2. 【核心修复】初始化构建环境
+          # 原链接已死，这里替换为 ImmortalWrt 官方 GitHub 仓库的最新脚本
+          # 增加了 || true 防止因为网络波动导致整个流水线直接报错中断
+          echo "正在初始化构建环境..."
+          curl -sSL https://raw.githubusercontent.com/immortalwrt/build-scripts/refs/heads/master/init_build_environment.sh | sudo bash || {
+            echo "官方脚本执行失败，尝试手动安装基础依赖以防万一..."
+            sudo apt-get update
+            sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-distutils python3-setuptools rsync swig unzip zlib1g-dev file wget
+          }
+          
+          # 3. 安装额外依赖 (针对 NN6000V2 或特定插件)
           sudo -E apt -yqq install dos2unix
           sudo -E apt -yqq install libfuse-dev
-
+          
+          # 4. 清理安装产生的缓存
           sudo -E apt -yqq autoremove --purge
           sudo -E apt -yqq autoclean
           sudo -E apt -yqq clean
           sudo rm -rf /var/lib/apt/lists/*
-
+          
           sudo -E systemctl daemon-reload
-
+          
           echo "=== Final Disk Space ==="
           df -h
 
@@ -82,12 +97,13 @@ jobs:
         run: |
           chmod +x ./nn6000v2/scripts/update.sh
           chmod +x ./nn6000v2/scripts/build.sh
-
+          
           echo "克隆仓库：${{ env.REPO_URL }} 分支：${{ env.REPO_BRANCH }}"
           git clone --depth 1 -b ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} ./action_build
           cd ./action_build && git rev-parse HEAD > ../repo_flag
           cd ..
-
+          
+          # 移除国内下载源 (防止在 Actions 中连接超时)
           PROJECT_MIRRORS_FILE="./action_build/scripts/projectsmirrors.json"
           if [ -f "$PROJECT_MIRRORS_FILE" ]; then
             sed -i '/.cn\//d; /tencent/d; /aliyun/d' "$PROJECT_MIRRORS_FILE"
@@ -113,6 +129,18 @@ jobs:
             done
           fi
 
+      - name: Fix gettext build error (防御性修复)
+        run: |
+          # 这是一个防御性措施。虽然换了脚本可能好了，但为了防止 Ubuntu 24.04 的 gettext 依然有坑，
+          # 我们在编译前强制检查并修复一次。
+          TARGET_FILE="./action_build/build_dir/hostpkg/gettext-*/gnulib-lib/options.h"
+          if ls $TARGET_FILE 1> /dev/null 2>&1; then
+             sed -i '/#include <stdcountof.h>/s/^/\/\//' $TARGET_FILE
+             echo "已修复 gettext stdcountof.h 问题"
+          else
+             echo "未找到 gettext 源码目录，跳过修复 (可能尚未解压或无需修复)"
+          fi
+
       - name: Build Firmware
         run: |
           if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
@@ -125,7 +153,7 @@ jobs:
 
           PPPOE_USER="${{ github.event.inputs.pppoe_username || '-' }}"
           PPPOE_PASS="${{ github.event.inputs.pppoe_password || '-' }}"
-
+          
           if [ "$PPPOE_USER" != "-" ] || [ "$PPPOE_PASS" != "-" ]; then
             echo "正在配置 PPPoE 账号密码..."
             sed -i "s#^PPPOE_USERNAME=.*#PPPOE_USERNAME=\"$PPPOE_USER\"#" ./nn6000v2/patches/992_network_config.sh
@@ -135,54 +163,39 @@ jobs:
           else
             echo "未输入 PPPoE 账号密码，使用默认值 '-'"
           fi
-
+          
+          # 开始编译
           ./nn6000v2/scripts/build.sh ${{ env.DEVICE_MODEL }}
-
+          
+          # 获取内核版本用于发布说明
           FIRST_MANIFEST=$(ls ./firmware/immortalwrt-*.manifest 2>/dev/null | head -1)
           if [ -n "$FIRST_MANIFEST" ]; then
-            echo "Manifest 文件：$FIRST_MANIFEST"
-            echo "查找内核版本..."
             KVER=$(grep "^kernel " "$FIRST_MANIFEST" | grep -oE "[4-6]\.[0-9]+\.[0-9]+" | head -1 || echo "")
             if [ -n "$KVER" ]; then
               echo "KVER=$KVER" >> $GITHUB_ENV
               echo "内核版本：$KVER"
             else
               echo "KVER=unknown" >> $GITHUB_ENV
-              echo "未找到内核版本"
             fi
           else
             echo "KVER=unknown" >> $GITHUB_ENV
-            echo "manifest 文件不存在"
           fi
 
       - name: Cleanup Old Cache
         continue-on-error: true
         run: |
           echo "=== Cleaning up old caches ==="
-          echo "Current caches:"
           gh cache list || true
-
           CACHE_PREFIX="${{ matrix.os }}-"
-          echo "Searching caches with prefix: ${CACHE_PREFIX}*"
-
           MATCHING_CACHES=$(gh cache list --json key --jq '.[].key' 2>/dev/null | grep "^${CACHE_PREFIX}" || true)
-
           if [ -n "$MATCHING_CACHES" ]; then
-            echo "Found caches to delete:"
             echo "$MATCHING_CACHES" | while IFS= read -r key; do
               if [ -n "$key" ]; then
-                echo "  → Deleting: $key"
+                echo "Deleting: $key"
                 gh cache delete "$key" || true
               fi
             done
-            echo "Cache cleanup completed"
-          else
-            echo "No matching caches found, skipping cleanup"
           fi
-
-          echo "========cache status========"
-          echo "ccache: $(du -sh ./action_build/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
-          echo "staging: $(du -sh ./action_build/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
       - name: Save Build Dependencies Cache
         uses: actions/cache/save@v5.0.4
@@ -194,11 +207,8 @@ jobs:
 
       - name: Machine Information
         run: |
-          echo "=============================================="
           lscpu | grep -E "name|Core|Thread"
-          echo "=============================================="
           df -h
-          echo "=============================================="
 
       - name: Prepare Release Body
         run: |
@@ -210,7 +220,6 @@ jobs:
             echo "- LAN 地址：10.0.0.1"
             echo "- 账户：root"
             echo "- 密码：无"
-            echo "- no_wifi 后缀的版本未包含 WIFI 驱动程序"
           } > release_body.txt
 
       - name: Release Firmware
@@ -232,42 +241,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "=========================================="
-          echo "开始清理旧版本..."
-          echo "=========================================="
-
-          echo "所有 Releases 列表:"
-          gh release list --json tagName,createdAt --jq 'sort_by(.tagName) | reverse | .[] | {tagName: .tagName, createdAt: .createdAt}'
-          echo ""
-
+          # 保留最新的 10 个 Release
           RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
-
-          if [ -z "$RELEASES" ]; then
-            echo "无需清理 Release"
-          else
-            echo "删除旧 Release:"
+          if [ -n "$RELEASES" ]; then
             echo "$RELEASES" | while read -r tag; do
-              if [ -n "$tag" ]; then
-                echo "  删除：$tag"
-                gh release delete "$tag" --cleanup-tag --yes 2>/dev/null || true
-              fi
+              gh release delete "$tag" --cleanup-tag --yes 2>/dev/null || true
             done
           fi
-
-          echo ""
-          echo "✓ 旧版本清理完成"
-
-          echo ""
-          echo "清理旧的工作流运行记录..."
-          echo "所有工作流运行记录:"
-          gh run list --workflow release.yml --json name,databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[] | {name: .name, databaseId: .databaseId, createdAt: .createdAt}'
-          echo ""
-
+          
+          # 保留最新的 10 个工作流记录
           gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
             if [ -n "$run_id" ]; then
-              echo "  删除工作流运行记录：$run_id"
               gh run delete "$run_id" 2>/dev/null || true
             fi
           done
-
-          echo "✓ 工作流运行记录清理完成"
