@@ -19,7 +19,7 @@ on:
 env:
   DEVICE_MODEL: link_nn6000v2_immwrt
   REPO_URL: https://github.com/immortalwrt/immortalwrt.git
-  REPO_BRANCH: main
+  REPO_BRANCH: master
   BUILD_DIR: imm-nss
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
