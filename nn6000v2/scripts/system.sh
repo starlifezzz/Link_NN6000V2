@@ -14,6 +14,9 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
     install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
+    # sysctl 网络调优：构建期打入 rootfs (/etc/sysctl.d/)，每次开机由 init.d/sysctl 应用，
+    # 随固件 sysupgrade 自动保留（不再依赖 uci-defaults 一次性写入 /etc/sysctl.conf）
+    install -Dm644 "$BASE_PATH/patches/sysctl_custom.conf" "$BUILD_DIR/package/base-files/files/etc/sysctl.d/99-custom.conf"
     
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
@@ -111,22 +114,6 @@ EOF
     chmod +x "$sh_dir/custom_task"
 }
 
-apply_passwall_tweaks() {
-    local xray_util_path="$BUILD_DIR/feeds/passwall/luci-app-passwall/luasrc/passwall/util_xray.lua"
-    if [ -f "$xray_util_path" ]; then
-        sed -i 's/maxRTT = "1s"/maxRTT = "2s"/g' "$xray_util_path"
-        sed -i 's/sampling = 3/sampling = 5/g' "$xray_util_path"
-    fi
-}
-
-update_nss_pbuf_performance() {
-    local pbuf_path="$BUILD_DIR/package/kernel/mac80211/files/pbuf.uci"
-    if [ -d "$(dirname "$pbuf_path")" ] && [ -f $pbuf_path ]; then
-        sed -i "s/auto_scale '1'/auto_scale 'off'/g" $pbuf_path
-        sed -i "s/scaling_governor 'performance'/scaling_governor 'schedutil'/g" $pbuf_path
-    fi
-}
-
 update_nss_diag() {
     local file="$BUILD_DIR/package/base-files/files/usr/bin/nss_diag.sh"
     mkdir -p "$(dirname "$file")"
@@ -156,18 +143,6 @@ add_backup_info_to_sysupgrade() {
 /etc/easytier
 /etc/lucky/
 EOF
-    fi
-}
-
-update_script_priority() {
-    local qca_drv_path="$BUILD_DIR/package/feeds/nss_packages/qca-nss-drv/files/qca-nss-drv.init"
-    if [ -d "${qca_drv_path%/*}" ] && [ -f "$qca_drv_path" ]; then
-        sed -i 's/START=.*/START=88/g' "$qca_drv_path"
-    fi
-
-    local pbuf_path="$BUILD_DIR/package/kernel/mac80211/files/qca-nss-pbuf.init"
-    if [ -d "${pbuf_path%/*}" ] && [ -f "$pbuf_path" ]; then
-        sed -i 's/START=.*/START=89/g' "$pbuf_path"
     fi
 }
 
@@ -342,35 +317,6 @@ fix_pbr_ip_forward() {
     else
         echo "修复应用失败：未找到预期的修复内容"
         return 1
-    fi
-}
-
-fix_quectel_cm() {
-    local makefile_path="$BUILD_DIR/package/feeds/packages/quectel-cm/Makefile"
-    local cmake_patch_path="$BUILD_DIR/package/feeds/packages/quectel-cm/patches/020-cmake.patch"
-
-    if [ -f "$makefile_path" ]; then
-        echo "正在修复 quectel-cm Makefile..."
-
-        sed -i '/^PKG_SOURCE:=/d' "$makefile_path"
-        sed -i '/^PKG_SOURCE_URL:=@IMMORTALWRT/d' "$makefile_path"
-        sed -i '/^PKG_HASH:=/d' "$makefile_path"
-
-        sed -i '/^PKG_RELEASE:=/a\
-\
-PKG_SOURCE_PROTO:=git\
-PKG_SOURCE_URL:=https://github.com/Carton32/quectel-CM.git\
-PKG_SOURCE_VERSION:=$(PKG_VERSION)\
-PKG_MIRROR_HASH:=skip' "$makefile_path"
-
-        sed -i 's/^PKG_RELEASE:=2$/PKG_RELEASE:=3/' "$makefile_path"
-
-        echo "quectel-cm Makefile 修复完成。"
-    fi
-
-    if [ -f "$cmake_patch_path" ]; then
-        sed -i 's/-cmake_minimum_required(VERSION 2\.4)$/-cmake_minimum_required(VERSION 2.4) /' "$cmake_patch_path"
-        sed -i 's/project(quectel-CM)$/project(quectel-CM) /' "$cmake_patch_path"
     fi
 }
 

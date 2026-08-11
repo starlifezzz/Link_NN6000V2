@@ -133,25 +133,6 @@ clone_easytier() {
 }
 
 
-clone_diskman() {
-    local path="$OPENWRT_PACKAGES_DIR/luci-app-diskman"
-    local repo_url="${GITHUB_BASE}lisaac/luci-app-diskman.git"
-    local temp_dir="$OPENWRT_PACKAGES_DIR/diskman"
-    
-    clone_packages "luci-app-diskman" \
-        "$repo_url" \
-        "$temp_dir" \
-        "applications/luci-app-diskman" \
-        "" \
-        "" \
-        "$temp_dir/applications/luci-app-diskman" \
-        "$path"
-    
-    sed -i 's/fs-ntfs /fs-ntfs3 /g' "$path/Makefile"
-    sed -i '/ntfs-3g-utils /d' "$path/Makefile"
-}
-
-
 clone_quickfile() {
     local QUICKFILE_DIR="$OPENWRT_PACKAGES_DIR/luci-app-quickfile"
     local TEMP_DIR="$OPENWRT_PACKAGES_DIR/quickfile-temp"

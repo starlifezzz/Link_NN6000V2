@@ -25,12 +25,13 @@ if [[ ! -f $CONFIG_FILE ]]; then
 fi
 
 # Use environment variables or defaults for repo config
-# REPO_URL=${REPO_URL:-https://github.com/VIKINGYFY/immortalwrt.git}
-# REPO_BRANCH=${REPO_BRANCH:-main}
+# 默认回退原版 VIKINGYFY/immortalwrt (main)，含完整 NSS 生态
+REPO_URL=${REPO_URL:-https://github.com/VIKINGYFY/immortalwrt.git}
+REPO_BRANCH=${REPO_BRANCH:-main}
 
-# 改为官方仓库
-REPO_URL=${REPO_URL:-https://github.com/immortalwrt/immortalwrt.git}
-REPO_BRANCH=${REPO_BRANCH:-master}
+# 官方仓库（如需切换，取消注释下一行并注释上面两行）
+# REPO_URL=${REPO_URL:-https://github.com/immortalwrt/immortalwrt.git}
+# REPO_BRANCH=${REPO_BRANCH:-master}
 
 BUILD_DIR=${BUILD_DIR:-imm-nss}
 COMMIT_HASH=${COMMIT_HASH:-none}
@@ -191,20 +192,19 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     mkdir -p "$FIRMWARE_DIR"
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec cp -f {} "$FIRMWARE_DIR/" \;
     
-    # 直接修改当前配置文件（禁用 WiFi）
+    # 生成 nowifi 版本的 .config（通过管道生成，不修改源配置，避免中途失败污染源文件）
     cd "$BASE_PATH/../$BUILD_DIR"
     
     echo "应用配置..."
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath=y$/CONFIG_PACKAGE_kmod-ath=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k=y$/CONFIG_PACKAGE_kmod-ath11k=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k-ahb=y$/CONFIG_PACKAGE_kmod-ath11k-ahb=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k-pci=y$/CONFIG_PACKAGE_kmod-ath11k-pci=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018=y$/CONFIG_PACKAGE_ath11k-firmware-ipq6018=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074=n/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n/' "$CONFIG_FILE"
-    
-    cp -f "$CONFIG_FILE" .config
+    sed -e 's/^CONFIG_PACKAGE_kmod-ath=y$/CONFIG_PACKAGE_kmod-ath=n/' \
+        -e 's/^CONFIG_PACKAGE_kmod-ath11k=y$/CONFIG_PACKAGE_kmod-ath11k=n/' \
+        -e 's/^CONFIG_PACKAGE_kmod-ath11k-ahb=y$/CONFIG_PACKAGE_kmod-ath11k-ahb=n/' \
+        -e 's/^CONFIG_PACKAGE_kmod-ath11k-pci=y$/CONFIG_PACKAGE_kmod-ath11k-pci=n/' \
+        -e 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018=y$/CONFIG_PACKAGE_ath11k-firmware-ipq6018=n/' \
+        -e 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=n/' \
+        -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074=n/' \
+        -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n/' \
+        "$CONFIG_FILE" > .config
     make defconfig
     
     echo "编译无 WiFi 版本..."
@@ -217,15 +217,6 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         echo "Copying: $filename -> $new_filename"
         cp -f "$file" "$FIRMWARE_DIR/$new_filename"
     done
-    
-    # 恢复配置文件
-    echo "恢复配置文件..."
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath=n$/CONFIG_PACKAGE_kmod-ath=y/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k=n$/CONFIG_PACKAGE_kmod-ath11k=y/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k-ahb=n$/CONFIG_PACKAGE_kmod-ath11k-ahb=y/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_kmod-ath11k-pci=n$/CONFIG_PACKAGE_kmod-ath11k-pci=y/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=n$/CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=y/' "$CONFIG_FILE"
-    sed -i 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y/' "$CONFIG_FILE"
     
     echo ""
     echo "=============================================="

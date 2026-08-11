@@ -55,7 +55,6 @@ main() {
     update_dnsmasq_conf
     change_cpuusage
     set_custom_task
-    update_nss_pbuf_performance
     update_nss_diag
     fix_compile_coremark
     add_backup_info_to_sysupgrade
@@ -66,9 +65,7 @@ main() {
     update_nginx_ubus_module
     fix_nginx_configure
     update_uwsgi_limit_as
-    update_script_priority
     fix_openssl_ktls
-    fix_quectel_cm
     install_pbr_isp
     fix_pbr_ip_forward
 }

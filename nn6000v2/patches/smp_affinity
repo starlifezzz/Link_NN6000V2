@@ -111,7 +111,7 @@ enable_affinity() {
         set_affinity 'edma_rxdesc' 0 1
         set_affinity 'edma_misc' 0 1
 
-        # NSS 硬件加速分配到 CPU0-1
+        # NSS 硬件加速分配到 CPU0-1（VIKINGYFY 分支含 qca-nss-drv，IRQ 有效）
         set_affinity 'nss_queue0' 0-1 1
         set_affinity 'bam_dma' 0 1
 
@@ -151,6 +151,7 @@ enable_affinity() {
             set_affinity 'edma_rxdesc' 3 1
             set_affinity 'edma_misc' 3 1
 
+            # NSS 中断绑定 CPU2-3（与 WiFi 的 0-1 隔离）
             set_affinity 'nss_queue0' 2-3 1
         else
             # 无 WiFi：所有中断均匀分散，最大化吞吐
@@ -162,11 +163,11 @@ enable_affinity() {
             set_affinity 'edma_rxdesc' 2 1
             set_affinity 'edma_misc' 2-3 1
 
-            # NSS 硬件加速利用全部核心
+            # NSS 中断分散到全部核心（无 WiFi 场景，最大化吞吐）
             set_affinity 'nss_queue0' 0-3 1
         fi
 
-        # DMA 引擎分散到 CPU1-3
+        # BAM DMA 分散到 CPU1-3（VIKINGYFY 分支含 NSS BAM DMA IRQ）
         set_affinity 'bam_dma' 1 1
         set_affinity 'bam_dma' 2 2
         set_affinity 'bam_dma' 3 3

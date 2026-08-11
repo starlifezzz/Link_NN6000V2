@@ -101,11 +101,18 @@ ImmortalWrt/OpenWrt 固件开发问题的主要知识来源：
    ✅ 如需修改上游行为，应优先提交 PR 到上游仓库
    ✅ 如需临时 workaround，必须注释说明原因和预期移除条件
 
-10. 【刷入该项目的硬件参数】
-   主机名	ImmortalWRT
-   型号	Link NN6000 v2
-   架构	ARMv8 Processor rev 4 (v8l) x 4 (1512.0MHz)
-   温度	CPU: 51.0°C
-   目标平台	qualcommax/ipq60xx
-   固件版本	ImmortalWRT SNAPSHOT r0-30e2876 / LuCI Master 26.188.75359~d2afa60 / build by TheJoker
-   内核版本	6.18.38
+ 10. 【刷入该项目的硬件参数】（以真机为准，2026-08 用户实测）
+    主机名	ImmortalWRT
+    型号	Link NN6000 v2
+    架构	ARMv8 Processor rev 4 (v8l) x 4 (1512.0MHz)
+    内存	1946864 KB total / 318944 used（2GB RAM，内存充裕，可放宽缓冲区）
+    CPU 温度	51.0°C
+    目标平台	qualcommax/ipq60xx
+    固件版本	ImmortalWRT SNAPSHOT r0-90b42f9
+    内核版本	6.18.41
+    rootfs	/dev/mmcblk0p18 squashfs 54.8M (只读 /rom)
+    overlay	/dev/sda1 ext4 4.8G (100.8M used, 挂载 /overlay)
+    数据盘	/dev/sda2 ext4 23.6G (挂载 /mnt/sda2)
+    包管理器	apk 3.x（apk 架构: aarch64_cortex-a53）
+    构建源码	VIKINGYFY/immortalwrt main（NSS 生态: package/qca-nss/ 全套默认打包）
+    用户偏好	WiFi 性能差，主要刷 nowifi 版（有线纯转发）；内存大，调优偏激进
