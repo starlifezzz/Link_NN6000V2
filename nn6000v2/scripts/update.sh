@@ -52,6 +52,7 @@ main() {
     fix_mk_def_depends
     update_default_lan_addr
     update_affinity_script
+    install_luci_ucode_fix
     update_dnsmasq_conf
     change_cpuusage
     set_custom_task

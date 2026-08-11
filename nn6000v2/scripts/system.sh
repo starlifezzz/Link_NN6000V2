@@ -57,6 +57,18 @@ update_affinity_script() {
     fi
 }
 
+# 修复 istore 全量备份还原后旧版 luci ucode 文件遮蔽 /rom 新版导致的
+# luci RPC object 未注册（前端 -32000 Object not found、系统信息变 ?）。
+# 每次开机（START=10，早于 rpcd START=12）用 /rom 固件自带版本覆盖。
+install_luci_ucode_fix() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ -d "$target_dir" ]; then
+        install -Dm755 "$BASE_PATH/patches/fix_luci_ucode" "$target_dir/base-files/etc/init.d/fix_luci_ucode"
+        echo "已安装 fix_luci_ucode 启动修复脚本 (luci ucode 版本自愈)"
+    fi
+}
+
 fix_hash_value() {
     local makefile_path="$1"
     local old_hash="$2"

@@ -156,7 +156,62 @@ modify_kernel_size() {
 
 modify_kernel_size
 
+# 防御性覆盖 GL-AX1800 的 dts 为已知健康版本
+# 背景: VIKINGYFY main 与 upstream/master 合并（commit 6353e1f "Merge remote-tracking
+#       branch 'upstream/master'"）曾造成 ipq60xx.mk / 多个 dts 冲突，其 merge 窗口期
+#       ipq6000-glinet.dtsi 的 include 链损坏导致 dtc phandle_references 报错
+#       （dp1-dp5 引用无法解析），连累整个 ipq60xx 内核 DTS 编译失败。
+#       当前上游已修复，本函数为防御性保险：若上游再次 merge 破坏 glinet 系列 dts，
+#       构建时强制覆盖为已知健康版本，保证 link_nn6000 的共享 dtsi（ipq6018-ess.dtsi
+#       等）不受影响。link_nn6000 自身不依赖 ipq6000-glinet.dtsi，覆盖仅影响 gl-ax1800
+#       设备定义，不改变我们目标设备行为。
+# 注意: 覆盖会丢弃上游对 glinet 系列 dts 的未来改进（本仓库仅使用 link_nn6000，
+#       影响可忽略）。上游彻底修复并稳定后可移除本函数。
+restore_glinet_dts() {
+    local dts_dir="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/dts"
+    local patch_dir="$BASE_PATH/patches"
+
+    if [ ! -d "$dts_dir" ]; then
+        echo "✗ Warning: qualcommax dts dir not found at $dts_dir, skip glinet dts restore"
+        return 1
+    fi
+
+    # 仅当上游文件缺失或 include 链明显损坏（缺少 ipq6018-ess.dtsi）时才覆盖，
+    # 避免每次构建都无谓地覆盖上游改进
+    if [ ! -f "$dts_dir/ipq6000-glinet.dtsi" ] || \
+       ! grep -q 'ipq6018-ess.dtsi' "$dts_dir/ipq6000-glinet.dtsi"; then
+        echo "✓ Restoring healthy glinet dts (gl-ax1800 include chain) from patches/"
+        \cp -f "$patch_dir/ipq6000-glinet.dtsi" "$dts_dir/ipq6000-glinet.dtsi"
+        \cp -f "$patch_dir/ipq6000-gl-ax1800.dts" "$dts_dir/ipq6000-gl-ax1800.dts"
+    else
+        echo "✓ glinet dts include chain intact, skip restore"
+    fi
+}
+
+restore_glinet_dts
+
+# 仅保留 link_nn6000-v2，禁用 VIKINGYFY 其余 ipq60xx 设备的 DTB/镜像编译
+# 背景: 本 .config 仅显式声明 link_nn6000-v2=y，未对 VIKINGYFY 其余 31 个
+#       ipq60xx 设备写 =n。实际构建中观察到 glinet_gl-ax1800 的 DTS 被编译，
+#       且 VIKINGYFY main 近期与 upstream/master 合并后 ipq60xx.mk/多个 dts
+#       存在冲突（见 VIKINGYFY main 最新 merge commit），其 dts include 链
+#       解析失败导致 dtc phandle_references 报错。
+#       为避免依赖上游合并状态，这里显式裁剪：只保留 link_nn6000-v2，
+#       其余设备无论因何被 defconfig 选中一律置 n（自愈式，上游新增设备也安全）。
+# 注意: make defconfig 后必须再调用一次（defconfig 会补齐缺失符号默认值）。
+restrict_to_link_nn6000() {
+    local device_line
+    # 1. 将所有 ipq60xx 设备的 DEVICE_*=y 行全部置 n（含 link_nn6000-v1/v2）
+    grep -E '^CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_.+=y$' .config | while IFS= read -r device_line; do
+        sed -i "s|^${device_line%=y}=y$|${device_line%=y}=n|" .config
+    done
+    # 2. 把 link_nn6000-v2 恢复为 y
+    sed -i 's/^CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=n$/CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=y/' .config
+}
+
 cd "$BASE_PATH/../$BUILD_DIR"
+make defconfig
+restrict_to_link_nn6000
 make defconfig
 
 if [[ $Build_Mod == "debug" ]]; then
@@ -205,6 +260,8 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074=n/' \
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n/' \
         "$CONFIG_FILE" > .config
+    make defconfig
+    restrict_to_link_nn6000
     make defconfig
     
     echo "编译无 WiFi 版本..."
