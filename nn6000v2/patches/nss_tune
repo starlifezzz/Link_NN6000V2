@@ -1,0 +1,91 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# nss_tune - NSS n2h/pbuf 调优（纯有线 / nowifi 场景）
+#
+# 背景:
+#   VIKINGYFY 官方 NSS pbuf 调优脚本 qca-nss-pbuf.init 只在
+#   CONFIG_ATH11K_NSS_SUPPORT 定义时才由 mac80211 包安装
+#   （package/kernel/mac80211/Makefile: ifdef CONFIG_ATH11K_NSS_SUPPORT），
+#   且其 start() 首行即被 ath11k 运行时检查挡住：
+#       ath11k_runtime_available || { ...skipping... return 0; }
+#   对 nowifi 设备（无 ieee80211 / 无线模块未加载）根本不会执行。
+#   真机实测 dev.nss.n2hcfg.* 全为默认值，NSS 未按 2GB 内存调优。
+#
+# 机制:
+#   在 qca-nss-drv (START=28) 加载后尽早写入官方 apply_nss_config 的
+#   内存分档值。extra_pbuf_core0 仅在当前为 0（未分配）时设置。
+#
+# 取值来源: VIKINGYFY package/kernel/mac80211/files/qca-nss-pbuf.init
+#           apply_nss_config() 的内存分档（>512MB 档）。
+# 移除条件: 上游让 qca-nss-pbuf.init 脱离 ath11k 检查、对纯有线也生效后。
+######################################################################
+
+START=27
+
+PROG=nss_tune
+
+apply_nss_tune() {
+    local t=8
+
+    # 等待 NSS n2hcfg sysctl 就绪（qca-nss-drv 在 START=28 加载）
+    while [ "$t" -gt 0 ]; do
+        [ -w /proc/sys/dev/nss/n2hcfg/n2h_queue_limit_core0 ] && break
+        sleep 1
+        t=$((t - 1))
+    done
+
+    [ -w /proc/sys/dev/nss/n2hcfg/n2h_queue_limit_core0 ] || {
+        logger -t "$PROG" "NSS n2hcfg sysctl 未就绪，跳过调优"
+        return 0
+    }
+
+    # 关闭 NSS 频率 auto_scale（固定频率，降低延迟抖动）
+    sysctl -qw dev.nss.clock.auto_scale 0
+
+    # n2h 队列限制（官方值）
+    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core0 2048
+    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core1 2048 2>/dev/null
+
+    # 按 MemTotal 分档（对齐官方 apply_pbuf_profile）
+    local mem ep hw
+    mem=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    if [ "${mem:-0}" -gt 512000 ]; then
+        ep=10000000
+        hw=65536
+    elif [ "${mem:-0}" -gt 256000 ]; then
+        ep=8000000
+        hw=32768
+    else
+        ep=4000000
+        hw=16384
+    fi
+
+    # extra_pbuf_core0 只能在未分配(=0)时设置，分配后不可改
+    local cur
+    cur=$(sysctl -n dev.nss.n2hcfg.extra_pbuf_core0 2>/dev/null)
+    if [ "${cur:-0}" = "0" ]; then
+        sysctl -qw dev.nss.n2hcfg.extra_pbuf_core0 "$ep" && \
+            logger -t "$PROG" "extra_pbuf_core0=$ep (mem=${mem}kB)"
+    else
+        logger -t "$PROG" "extra_pbuf_core0 已分配($cur)，跳过"
+    fi
+
+    sysctl -qw dev.nss.n2hcfg.n2h_high_water_core0 "$hw"
+
+    # RPS hash bitmap 分散到全部 CPU（对齐官方 hash_bitmap=(1<<ncpu)-1）
+    local ncpu
+    ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    [ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] && \
+        sysctl -qw dev.nss.rps.hash_bitmap "$(((1 << ncpu) - 1))"
+
+    logger -t "$PROG" "NSS n2h/pbuf 调优完成 (ep=$ep hw=$hw queue=2048)"
+}
+
+start() {
+    apply_nss_tune
+}
+
+boot() {
+    apply_nss_tune
+}

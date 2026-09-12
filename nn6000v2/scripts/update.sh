@@ -55,6 +55,7 @@ main() {
     install_luci_ucode_fix
     install_istorex_fixes
     fix_nn6000_gpio_conflict
+    install_tuning_scripts
     update_dnsmasq_conf
     change_cpuusage
     set_custom_task

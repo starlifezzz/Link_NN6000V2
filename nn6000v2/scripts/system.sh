@@ -142,6 +142,27 @@ EOF
     echo "已禁用 ipq6000-link.dtsi 中与 WPS 键冲突的 blsp1_i2c3 (GPIO_42)"
 }
 
+# 安装 NSS / sysctl 调优脚本：
+#  - nss_tune (START=27): 纯有线场景的 NSS n2h/pbuf 调优（官方
+#    qca-nss-pbuf.init 受 CONFIG_ATH11K_NSS_SUPPORT + ath11k 运行时检查限制，
+#    nowifi 设备不生效）
+#  - sysctl_custom (START=30): 在 qca-nss-ecm (S26) 之后重新应用
+#    99-custom.conf，避免 conntrack_max 等被 qca-nss-ecm.conf / sysctl.conf 覆盖
+install_tuning_scripts() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ ! -d "$target_dir" ]; then
+        echo "警告: 未找到 qualcommax target，跳过调优脚本安装"
+        return 1
+    fi
+
+    install -Dm755 "$BASE_PATH/patches/nss_tune" \
+        "$target_dir/base-files/etc/init.d/nss_tune"
+    install -Dm755 "$BASE_PATH/patches/sysctl_custom" \
+        "$target_dir/base-files/etc/init.d/sysctl_custom"
+    echo "已安装 nss_tune / sysctl_custom 调优脚本"
+}
+
 fix_hash_value() {
     local makefile_path="$1"
     local old_hash="$2"

@@ -1,0 +1,45 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# sysctl_custom - 在启动后期重新应用自定义 sysctl
+#
+# 背景:
+#   /etc/init.d/sysctl (START=11) 的加载顺序是:
+#       for CONF in /etc/sysctl.d/*.conf /etc/sysctl.conf; do sysctl -e -p "$CONF"; done
+#   即字典序加载 sysctl.d 后，再加载 /etc/sysctl.conf。问题有二：
+#     1) qca-nss-ecm.conf 字典序 (q) 在 99-custom.conf (9) 之后，
+#        其 nf_conntrack_max=65535 覆盖自定义的 131072；
+#     2) /etc/sysctl.conf 最后加载，历史遗留值覆盖自定义项
+#        （如 tcp_rmem 64MB 覆盖 32MB）。
+#   更关键的是 qca-nss-ecm (START=26) 启动时会再次应用
+#   /etc/sysctl.d/qca-nss-ecm.conf（sysctl_update），把 conntrack_max
+#   再次改回 65535 —— 所以在 S11 阶段怎么调都无效。
+#
+# 机制:
+#   在 qca-nss-ecm (START=26) 之后重新应用 /etc/sysctl.d/99-custom.conf，
+#   确保自定义值最终生效。
+#
+# 移除条件: 99-custom.conf 被重命名为字典序位于 qca-nss-ecm.conf 之后、
+#           且 /etc/sysctl.conf 不再残留旧值时可移除本脚本。
+######################################################################
+
+START=30
+
+PROG=sysctl_custom
+
+CUSTOM_CONF=/etc/sysctl.d/99-custom.conf
+
+apply_custom_sysctl() {
+    if [ -f "$CUSTOM_CONF" ]; then
+        sysctl -e -q -p "$CUSTOM_CONF" 2>/dev/null && \
+            logger -t "$PROG" "已重新应用 $CUSTOM_CONF (覆盖 qca-nss-ecm.conf / sysctl.conf 旧值)"
+    fi
+}
+
+start() {
+    apply_custom_sysctl
+}
+
+boot() {
+    apply_custom_sysctl
+}
