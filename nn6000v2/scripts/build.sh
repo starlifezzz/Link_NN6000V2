@@ -269,8 +269,11 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     # 仅影响本次 nowifi 构建（WiFi 版此前已构建完成）。
     qca_mk="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/Makefile"
     if [ -f "$qca_mk" ]; then
-        sed -i 's/\bwpad-openssl\b//g; s/\bkmod-ath11k-ahb\b//g; s/\bkmod-ath11k-pci\b//g; s/\bkmod-ath11k\b//g' "$qca_mk"
-        echo "✓ nowifi: 已从 DEFAULT_PACKAGES 移除 wpad-openssl / kmod-ath11k*"
+        # 注意: 名称必须是 wpad-mesh-openssl —— system.sh 的 fix_mk_def_depends
+        # 已把默认的 wpad-openssl 替换成 wpad-mesh-openssl（真机包名证实），
+        # 只写 wpad-openssl 不会匹配，nowifi 仍会带上 wpad。
+        sed -i 's/\bwpad-mesh-openssl\b//g; s/\bwpad-openssl\b//g; s/\bkmod-ath11k-ahb\b//g; s/\bkmod-ath11k-pci\b//g; s/\bkmod-ath11k\b//g' "$qca_mk"
+        echo "✓ nowifi: 已从 DEFAULT_PACKAGES 移除 wpad-mesh-openssl / kmod-ath11k*"
     fi
 
     make defconfig
