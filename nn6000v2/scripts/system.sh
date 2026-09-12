@@ -107,6 +107,41 @@ install_istorex_fixes() {
     fi
 }
 
+# 修复 NN6000 的 WPS/reset 按键失效（gpio-keys probe -EINVAL）:
+#   ipq6018-common.dtsi 启用 blsp1_i2c3 (i2c@78b7000)，其 pinctrl i2c_1_pins
+#   占用 GPIO_42/43；而 ipq6000-link.dtsi 的 WPS 键也用 GPIO_42，冲突导致
+#   gpio-keys 整个节点 probe 失败（连 reset 键一起失效）。
+#   实测 i2c3 总线空置（无任何从设备），禁用之即可释放 GPIO_42。
+# 注: ipq6018-common.dtsi 为多设备共享，不动它；只改设备侧 ipq6000-link.dtsi
+#     （被 nn6000-v1/v2 共同 include，两者同源冲突）。
+# 移除条件: 上游在 ipq6000-link.dtsi 中自行处理该冲突（或上游内核改用
+#           gpio-reserved-ranges）后，可删除本函数。
+fix_nn6000_gpio_conflict() {
+    local dts="$BUILD_DIR/target/linux/qualcommax/dts/ipq6000-link.dtsi"
+
+    if [ ! -f "$dts" ]; then
+        echo "警告: 未找到 $dts，跳过 NN6000 按键 GPIO 冲突修复"
+        return 1
+    fi
+
+    if grep -q 'blsp1_i2c3' "$dts"; then
+        echo "ipq6000-link.dtsi 的 blsp1_i2c3 冲突已处理，跳过"
+        return 0
+    fi
+
+    cat >> "$dts" <<'EOF'
+
+/* GPIO_42 被 blsp1_i2c3 (i2c@78b7000) 的 pinctrl i2c_1_pins 占用，
+ * 与 WPS 键 (gpios = <&tlmm 42 GPIO_ACTIVE_LOW>) 冲突，导致 gpio-keys
+ * probe 失败 (-EINVAL)、WPS/reset 键全部失效。实测该 i2c 总线空置
+ * （无任何从设备），禁用之释放 GPIO_42 供按键使用。 */
+&blsp1_i2c3 {
+	status = "disabled";
+};
+EOF
+    echo "已禁用 ipq6000-link.dtsi 中与 WPS 键冲突的 blsp1_i2c3 (GPIO_42)"
+}
+
 fix_hash_value() {
     local makefile_path="$1"
     local old_hash="$2"

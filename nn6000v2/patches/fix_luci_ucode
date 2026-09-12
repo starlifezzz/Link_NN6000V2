@@ -20,21 +20,29 @@
 # 注意:
 #   不能用 rm（overlayfs 上 rm 会产生 whiteout 永久遮蔽 /rom 同名文件），
 #   必须用 cp 直接覆盖（cp 会清除 whiteout 并写入正确内容）。
-#   仅覆盖 luci-base 提供、随固件写入 /rom 的核心文件；不动
-#   controller/template/dispatcher 等用户可定制部分，避免误伤。
+#   仅覆盖固件自带、且不会被第三方插件合法 patch 的 luci 文件：
+#   luci ucode 核心 + 主题模板。
+#   ⚠️ 切勿加入 /usr/lib/lua/luci/http.lua、model/network.lua 等：
+#   OpenClash 会在安装时 patch 它们（追加 get_all_wan_networks、
+#   放大 HTTP_MAX_CONTENT），覆盖会破坏 OpenClash。
 ######################################################################
 
 START=10
 
 PROG=fix_luci_ucode
 
-# luci-base 提供、随固件写入 /rom 的核心 ucode 文件
+# 固件自带、随固件写入 /rom 的 luci 核心 ucode 文件 + 主题模板
 LUCI_FILES="
 /usr/share/rpcd/ucode/luci
 /usr/share/ucode/luci/sys.uc
 /usr/share/ucode/luci/version.uc
 /usr/share/ucode/luci/zoneinfo.uc
 /usr/lib/ucode/luci/core.so
+/usr/share/ucode/luci/template/header.ut
+/usr/share/ucode/luci/template/themes/argon/header.ut
+/usr/share/ucode/luci/template/themes/argon/footer.ut
+/usr/share/ucode/luci/template/themes/argon/header_login.ut
+/usr/share/ucode/luci/template/themes/argon/footer_login.ut
 "
 
 boot() {
