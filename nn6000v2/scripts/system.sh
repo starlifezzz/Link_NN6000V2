@@ -15,6 +15,7 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
     install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
     install -Dm544 "$BASE_PATH/patches/998_set_nss_freq" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/998_set_nss_freq"
+    install -Dm544 "$BASE_PATH/patches/999_harden_firewall" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/999_harden_firewall"
     # sysctl 网络调优：构建期打入 rootfs (/etc/sysctl.d/)，每次开机由 init.d/sysctl 应用，
     # 随固件 sysupgrade 自动保留（不再依赖 uci-defaults 一次性写入 /etc/sysctl.conf）
     install -Dm644 "$BASE_PATH/patches/sysctl_custom.conf" "$BUILD_DIR/package/base-files/files/etc/sysctl.d/99-custom.conf"
@@ -161,6 +162,8 @@ install_tuning_scripts() {
         "$target_dir/base-files/etc/init.d/nss_tune"
     install -Dm755 "$BASE_PATH/patches/sysctl_custom" \
         "$target_dir/base-files/etc/init.d/sysctl_custom"
+    install -Dm755 "$BASE_PATH/patches/fix_firewall_harden" \
+        "$target_dir/base-files/etc/init.d/fix_firewall_harden"
     echo "已安装 nss_tune / sysctl_custom 调优脚本"
 }
 

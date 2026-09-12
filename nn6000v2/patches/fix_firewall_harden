@@ -1,0 +1,98 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# fix_firewall_harden - 启动时检查并按需恢复防火墙安全加固
+#
+# 背景:
+#   999_harden_firewall (uci-defaults) 只在首次启动执行一次；
+#   而 istore 全量备份还原会把旧 firewall/dropbear 配置带回，
+#   覆盖掉加固项。本脚本每次开机检查关键项，仅在检测到"不安全值"时
+#   纠正，因此不影响用户正常的手动调整（往更安全方向改不会被重置）。
+#
+# 加固项（与 999_harden_firewall 一致）:
+#   1) firewall fullcone 关闭
+#   2) docker zone forward 收紧为 REJECT
+#   3) 删除 WAN 侧 linkease(8897) 放行规则
+#   4) dnsmasq 仅监听 lan
+#   5) dropbear 仅绑定 br-lan
+#
+# 时序: START=18，早于 firewall/dsnmasq/dropbear 的 START=19，
+#       开机早期只提交配置（服务随后自行读取新值）；若服务已在运行
+#       （运行期手动执行本脚本），才触发 reload/restart。
+#
+# 注意: UPnP 不在处理范围内（用户要求长期启用，本脚本不干预）。
+######################################################################
+
+START=18
+
+PROG=fix_firewall_harden
+
+apply_hardening() {
+    local changed=0
+
+    # 1) fullcone NAT 必须关闭
+    if [ "$(uci -q get firewall.@defaults[0].fullcone)" = "1" ]; then
+        uci set firewall.@defaults[0].fullcone='0'
+        changed=1
+        logger -t "$PROG" "fullcone NAT disabled"
+    fi
+
+    # 2) docker zone forward 不得为 ACCEPT
+    if [ "$(uci -q get firewall.docker.forward)" = "ACCEPT" ]; then
+        uci set firewall.docker.forward='REJECT'
+        changed=1
+        logger -t "$PROG" "docker zone forward ACCEPT -> REJECT"
+    fi
+
+    # 3) 删除 WAN 侧 linkease(8897) 放行规则
+    if uci -q get firewall.linkease >/dev/null 2>&1; then
+        uci -q delete firewall.linkease
+        changed=1
+        logger -t "$PROG" "removed WAN linkease(8897) rule"
+    fi
+
+    # 4) dnsmasq 必须限制在 lan
+    if ! uci -q get dhcp.@dnsmasq[0].interface 2>/dev/null | grep -qw lan; then
+        uci -q delete dhcp.@dnsmasq[0].interface 2>/dev/null
+        uci add_list dhcp.@dnsmasq[0].interface='lan'
+        changed=1
+        logger -t "$PROG" "dnsmasq interface restricted to lan"
+    fi
+
+    # 5) dropbear 必须绑定 br-lan
+    if [ -n "$(uci -q get dropbear.main)" ] && \
+       [ "$(uci -q get dropbear.main.Interface)" != "br-lan" ]; then
+        uci set dropbear.main.Interface='br-lan'
+        changed=1
+        logger -t "$PROG" "dropbear bound to br-lan"
+    fi
+
+    [ "$changed" = "0" ] && return 0
+
+    uci commit firewall 2>/dev/null
+    uci commit dhcp 2>/dev/null
+    uci commit dropbear 2>/dev/null
+
+    logger -t "$PROG" "hardening re-applied (changed=$changed)"
+
+    # 仅当服务已运行（非开机早期）才动服务；开机早期由各自的 START=19 读取新配置
+    [ -e /var/run/fw4.state ] && /etc/init.d/firewall reload 2>/dev/null
+
+    if pgrep -qx dnsmasq; then
+        /etc/init.d/dnsmasq restart 2>/dev/null
+    fi
+
+    if pgrep -qx dropbear; then
+        ( sleep 1; /etc/init.d/dropbear restart >/dev/null 2>&1 ) &
+    fi
+
+    return 0
+}
+
+start() {
+    apply_hardening
+}
+
+boot() {
+    apply_hardening
+}

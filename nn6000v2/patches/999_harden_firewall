@@ -1,0 +1,51 @@
+#!/bin/sh
+######################################################################
+# 999_harden_firewall - 首次启动应用防火墙安全加固
+#
+# 适用: 首次刷机 / 恢复出厂后执行一次（uci-defaults 机制）。
+# 说明: 本脚本只设"默认安全值"，之后用户可自由修改；若修改回不安全
+#       值，由 fix_firewall_harden (init) 在每次开机时自动纠正。
+#
+# 加固项:
+#   1) fullcone NAT 关闭（弱化 NAT 隐藏性的特性）
+#   2) docker zone forward 由 ACCEPT 收紧为 REJECT
+#   3) 删除 WAN 侧 linkease(8897) 放行规则
+#   4) dnsmasq 仅监听 lan（避免绑定 WAN 地址提供 DNS）
+#   5) dropbear 仅绑定 br-lan（不监听全网卡）
+#
+# 注意: UPnP 不在本脚本处理范围内（用户要求长期启用，不自动禁用）。
+#
+# 全部操作均带存在性判断，缺 section/包时静默跳过。
+######################################################################
+
+# 1) fullcone NAT 关闭
+if uci -q get firewall.@defaults[0] >/dev/null 2>&1; then
+	uci set firewall.@defaults[0].fullcone='0'
+fi
+
+# 2) docker zone 转发收紧（zone 可能存在或不存在）
+if uci -q get firewall.docker >/dev/null 2>&1; then
+	uci set firewall.docker.forward='REJECT'
+fi
+
+# 3) 删除 WAN 侧 linkease(8897) 放行规则
+if uci -q get firewall.linkease >/dev/null 2>&1; then
+	uci -q delete firewall.linkease
+fi
+
+# 4) dnsmasq 仅监听 lan
+if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+	uci -q delete dhcp.@dnsmasq[0].interface 2>/dev/null
+	uci add_list dhcp.@dnsmasq[0].interface='lan'
+fi
+
+# 5) dropbear 仅绑定 br-lan
+if uci -q get dropbear.main >/dev/null 2>&1; then
+	uci set dropbear.main.Interface='br-lan'
+fi
+
+uci commit firewall 2>/dev/null
+uci commit dhcp 2>/dev/null
+uci commit dropbear 2>/dev/null
+
+exit 0
