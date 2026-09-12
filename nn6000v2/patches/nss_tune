@@ -13,7 +13,8 @@
 #   真机实测 dev.nss.n2hcfg.* 全为默认值，NSS 未按 2GB 内存调优。
 #
 # 机制:
-#   在 qca-nss-drv (START=28) 加载后尽早写入官方 apply_nss_config 的
+#   在 qca-nss-drv (START=28) 之后（本脚本 START=29）写入官方
+#   apply_nss_config 的
 #   内存分档值。extra_pbuf_core0 仅在当前为 0（未分配）时设置。
 #
 # 取值来源: VIKINGYFY package/kernel/mac80211/files/qca-nss-pbuf.init
@@ -21,7 +22,7 @@
 # 移除条件: 上游让 qca-nss-pbuf.init 脱离 ath11k 检查、对纯有线也生效后。
 ######################################################################
 
-START=27
+START=29
 
 PROG=nss_tune
 
@@ -41,11 +42,11 @@ apply_nss_tune() {
     }
 
     # 关闭 NSS 频率 auto_scale（固定频率，降低延迟抖动）
-    sysctl -qw dev.nss.clock.auto_scale 0
+    sysctl -qw dev.nss.clock.auto_scale=0
 
     # n2h 队列限制（官方值）
-    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core0 2048
-    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core1 2048 2>/dev/null
+    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core0=2048
+    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core1=2048 2>/dev/null
 
     # 按 MemTotal 分档（对齐官方 apply_pbuf_profile）
     local mem ep hw
@@ -65,19 +66,19 @@ apply_nss_tune() {
     local cur
     cur=$(sysctl -n dev.nss.n2hcfg.extra_pbuf_core0 2>/dev/null)
     if [ "${cur:-0}" = "0" ]; then
-        sysctl -qw dev.nss.n2hcfg.extra_pbuf_core0 "$ep" && \
+        sysctl -qw "dev.nss.n2hcfg.extra_pbuf_core0=$ep" && \
             logger -t "$PROG" "extra_pbuf_core0=$ep (mem=${mem}kB)"
     else
         logger -t "$PROG" "extra_pbuf_core0 已分配($cur)，跳过"
     fi
 
-    sysctl -qw dev.nss.n2hcfg.n2h_high_water_core0 "$hw"
+    sysctl -qw "dev.nss.n2hcfg.n2h_high_water_core0=$hw"
 
     # RPS hash bitmap 分散到全部 CPU（对齐官方 hash_bitmap=(1<<ncpu)-1）
     local ncpu
     ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     [ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] && \
-        sysctl -qw dev.nss.rps.hash_bitmap "$(((1 << ncpu) - 1))"
+        sysctl -qw "dev.nss.rps.hash_bitmap=$(((1 << ncpu) - 1))"
 
     logger -t "$PROG" "NSS n2h/pbuf 调优完成 (ep=$ep hw=$hw queue=2048)"
 }
