@@ -164,7 +164,9 @@ install_tuning_scripts() {
         "$target_dir/base-files/etc/init.d/sysctl_custom"
     install -Dm755 "$BASE_PATH/patches/fix_firewall_harden" \
         "$target_dir/base-files/etc/init.d/fix_firewall_harden"
-    echo "已安装 nss_tune / sysctl_custom 调优脚本"
+    install -Dm755 "$BASE_PATH/patches/system_tune" \
+        "$target_dir/base-files/etc/init.d/system_tune"
+    echo "已安装 nss_tune / sysctl_custom / fix_firewall_harden / system_tune 脚本"
 }
 
 fix_hash_value() {
