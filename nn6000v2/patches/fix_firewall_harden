@@ -14,7 +14,7 @@
 #   2) docker zone forward 收紧为 REJECT
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan
-#   5) dropbear 仅绑定 br-lan
+#   5) dropbear 仅绑定 lan 网络（Interface=lan）
 #
 # 时序: START=18，早于 firewall/dsnmasq/dropbear 的 START=19，
 #       开机早期只提交配置（服务随后自行读取新值）；若服务已在运行
@@ -61,10 +61,10 @@ apply_hardening() {
 
     # 5) dropbear 必须绑定 br-lan
     if [ -n "$(uci -q get dropbear.main)" ] && \
-       [ "$(uci -q get dropbear.main.Interface)" != "br-lan" ]; then
-        uci set dropbear.main.Interface='br-lan'
+       [ "$(uci -q get dropbear.main.Interface)" != "lan" ]; then
+        uci set dropbear.main.Interface='lan'
         changed=1
-        logger -t "$PROG" "dropbear bound to br-lan"
+        logger -t "$PROG" "dropbear bound to lan"
     fi
 
     [ "$changed" = "0" ] && return 0

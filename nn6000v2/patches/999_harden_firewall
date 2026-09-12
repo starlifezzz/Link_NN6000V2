@@ -11,7 +11,7 @@
 #   2) docker zone forward 由 ACCEPT 收紧为 REJECT
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan（避免绑定 WAN 地址提供 DNS）
-#   5) dropbear 仅绑定 br-lan（不监听全网卡）
+#   5) dropbear 仅绑定 lan 网络（不监听全网卡）; Interface 须填逻辑网络名 lan（非 br-lan）
 #
 # 注意: UPnP 不在本脚本处理范围内（用户要求长期启用，不自动禁用）。
 #
@@ -41,7 +41,7 @@ fi
 
 # 5) dropbear 仅绑定 br-lan
 if uci -q get dropbear.main >/dev/null 2>&1; then
-	uci set dropbear.main.Interface='br-lan'
+	uci set dropbear.main.Interface='lan'
 fi
 
 uci commit firewall 2>/dev/null
