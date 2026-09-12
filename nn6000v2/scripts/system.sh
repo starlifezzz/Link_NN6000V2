@@ -69,6 +69,44 @@ install_luci_ucode_fix() {
     fi
 }
 
+# 修复 istorex 首页温度拿不到 / 系统信息 404：
+#  1) luci-app-istorex 0.6.6 前端调用 /cgi-bin/luci/linkease/api/，
+#     而 luci-app-quickstart 0.12.8 只注册 /cgi-bin/luci/istore/ 路由 → 404；
+#  2) quickstart 的 AutocoreTemperature 依赖 /sbin/cpuinfo 输出含 "xx.x°C"，
+#     但 ImmortalWrt/VIKINGYFY 的 autocore 把温度分离在 /sbin/tempinfo，
+#     导致温度恒为 0（接口返回 {"result":{}}）。
+# 均以 patches/ 下的修复版覆盖；另装 fix_istorex 运行期自愈（对抗备份还原）。
+# 移除条件: kenzok8 feed 的 luci-app-quickstart 原生提供 /linkease/api 路由，
+#           且其配套 autocore cpuinfo 输出自带温度后，可删除本函数与相关 patches。
+install_istorex_fixes() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    # 1. autocore cpuinfo：追加 CPU 温度（供 quickstart AutocoreTemperature 解析）
+    local cpuinfo="$BUILD_DIR/package/emortal/autocore/files/cpuinfo"
+    if [ -f "$cpuinfo" ] && [ -f "$BASE_PATH/patches/cpuinfo" ]; then
+        \cp -f "$BASE_PATH/patches/cpuinfo" "$cpuinfo"
+        echo "已替换 autocore cpuinfo（追加 CPU 温度，兼容 quickstart）"
+    fi
+
+    # 2. luci-app-quickstart 的 istore_backend.lua：增加 linkease/api 路由
+    local backend_file
+    backend_file="$(find "$BUILD_DIR/feeds" "$BUILD_DIR/package" \
+        -path "*luci-app-quickstart*" -name "istore_backend.lua" 2>/dev/null | head -1)"
+    if [ -n "$backend_file" ] && [ -f "$BASE_PATH/patches/istore_backend.lua" ]; then
+        \cp -f "$BASE_PATH/patches/istore_backend.lua" "$backend_file"
+        echo "已替换 istore_backend.lua（增加 /linkease/api 路由）"
+    else
+        echo "警告: 未找到 luci-app-quickstart 的 istore_backend.lua，跳过路由修复"
+    fi
+
+    # 3. 运行期自愈脚本（每次开机用 /rom 修复版覆盖被备份还原遮蔽的文件）
+    if [ -d "$target_dir" ]; then
+        install -Dm755 "$BASE_PATH/patches/fix_istorex" \
+            "$target_dir/base-files/etc/init.d/fix_istorex"
+        echo "已安装 fix_istorex 运行期自愈脚本 (istorex 温度/路由自愈)"
+    fi
+}
+
 fix_hash_value() {
     local makefile_path="$1"
     local old_hash="$2"

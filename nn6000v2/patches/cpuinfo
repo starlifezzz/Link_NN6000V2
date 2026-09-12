@@ -1,0 +1,54 @@
+#!/bin/sh
+
+. /etc/openwrt_release
+
+CPUINFO_PATH="/proc/cpuinfo"
+CPUFREQ_PATH="/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_cur_freq"
+
+cpu_arch="$(cat "$CPUINFO_PATH" 2>/dev/null | awk -F ': ' '/model name/ {print $2}' | head -n1 || echo 'N/A')"
+
+case "$DISTRIB_TARGET" in
+x86/*)
+	cpu_cores="$(cat "$CPUINFO_PATH" 2>/dev/null | awk -F ': ' '/cpu cores/ {print $2}' | head -n1)C $(grep -c "processor" "$CPUINFO_PATH")T"
+	;;
+*)
+	cpu_cores="$(grep -c "processor" "$CPUINFO_PATH")"
+	;;
+esac
+
+case "$DISTRIB_TARGET" in
+bcm27xx/*)
+	cpu_freq="$(( $(vcgencmd measure_clock arm | awk -F '=' '{print $2}') / 1000000 ))MHz"
+	;;
+bcm53xx/*)
+	cpu_freq="$(nvram get clkfreq | awk -F ',' '{print $1}')MHz"
+	;;
+x86/*)
+	cpu_freq="$(cat "$CPUINFO_PATH" 2>/dev/null | awk -F ': ' '/cpu MHz/ {print $2}' | head -n1)MHz"
+	;;
+*)
+	cpu_freq="$(cat "$CPUFREQ_PATH" 2>/dev/null | awk '{printf("%.1fMHz", $0 / 1000)}')"
+	;;
+esac
+
+if [ -n "$cpu_freq" ]; then
+	echo -n "$cpu_arch x $cpu_cores ($cpu_freq)"
+else
+	echo -n "$cpu_arch x $cpu_cores"
+fi
+
+# ---- CPU 温度（兼容 quickstart 的 AutocoreTemperature）----
+# iStoreOS autocore 的 cpuinfo 输出含 "xx.x°C"，quickstart 启动时若发现
+# /sbin/cpuinfo 存在即选用 AutocoreTemperature 并 grep 其中的温度；
+# ImmortalWrt/VIKINGYFY 的 autocore 把温度分离在 /sbin/tempinfo，导致
+# istorex 首页温度取不到（{"result":{}}）。此处补上，匹配 grep '[ (]\+?[0-9.]+°C'。
+cpu_temp_file=""
+for _z in /sys/class/thermal/thermal_zone*; do
+	[ -r "$_z/type" ] || continue
+	case "$(cat "$_z/type" 2>/dev/null)" in
+		*cpu*) cpu_temp_file="$_z/temp"; break ;;
+	esac
+done
+if [ -n "$cpu_temp_file" ] && [ -r "$cpu_temp_file" ]; then
+	awk -v t="$(cat "$cpu_temp_file" 2>/dev/null)" 'BEGIN{printf(" %.1f°C", t/1000)}'
+fi

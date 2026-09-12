@@ -1,0 +1,58 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# fix_istorex - 启动时确保 istorex/quickstart 的温度与 API 修复不丢失
+#
+# 背景:
+#   istore 全量备份会把旧版 /sbin/cpuinfo 与
+#   /usr/lib/lua/luci/controller/istore_backend.lua 带回 overlay，遮蔽 /rom
+#   中固件自带的修复版，导致 istorex 首页温度再次拿不到、系统信息 404。
+#
+#   两处修复（固件构建期已写入 /rom，见 patches/cpuinfo、
+#   patches/istore_backend.lua）：
+#     1) /sbin/cpuinfo 追加 CPU 温度 —— quickstart 启动时只要发现
+#        /sbin/cpuinfo 存在就选用 AutocoreTemperature，并 grep 其中的
+#        "xx.x°C"；ImmortalWrt 系 autocore 把温度分离在 /sbin/tempinfo，
+#        导致温度恒为 0（接口返回 {"result":{}}）。
+#     2) istore_backend.lua 增加 /linkease/api 路由 —— luci-app-istorex
+#        0.6.6 前端调用 /cgi-bin/luci/linkease/api/，而 luci-app-quickstart
+#        只提供 /cgi-bin/luci/istore/ 路由，导致 404。
+#
+# 机制:
+#   每次开机检查关键特征（cpuinfo 是否含 "°C"、istore_backend 是否含
+#   "linkease"），缺失则用 /rom 中固件自带版本覆盖。
+#
+# 注意:
+#   用 cp 覆盖而非 rm（overlayfs 的 rm 会产生 whiteout 永久遮蔽 /rom）。
+######################################################################
+
+START=20
+
+PROG=fix_istorex
+
+CPUINFO=/sbin/cpuinfo
+BACKEND=/usr/lib/lua/luci/controller/istore_backend.lua
+
+apply_fix() {
+    # 1. cpuinfo 必须含温度（quickstart AutocoreTemperature 依赖）
+    if [ -f "/rom$CPUINFO" ] && ! grep -q '°C' "$CPUINFO" 2>/dev/null; then
+        if cp -f "/rom$CPUINFO" "$CPUINFO" 2>/dev/null; then
+            logger -t "$PROG" "restored $CPUINFO from /rom (missing temperature)"
+        fi
+    fi
+
+    # 2. istore_backend.lua 必须含 linkease/api 路由
+    if [ -f "/rom$BACKEND" ] && ! grep -q 'linkease' "$BACKEND" 2>/dev/null; then
+        if cp -f "/rom$BACKEND" "$BACKEND" 2>/dev/null; then
+            logger -t "$PROG" "restored $BACKEND from /rom (missing linkease route)"
+        fi
+    fi
+}
+
+boot() {
+    apply_fix
+}
+
+start() {
+    apply_fix
+}
