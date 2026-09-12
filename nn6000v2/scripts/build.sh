@@ -260,6 +260,19 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074=n/' \
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n/' \
         "$CONFIG_FILE" > .config
+
+    # 关键: wpad-openssl / kmod-ath11k* 位于 qualcommax/Makefile 的
+    # DEFAULT_PACKAGES（第 14-16 行），而 DEFAULT_PACKAGES 优先级高于 .config
+    # 的 =n —— 只改 .config 无法真正移除。必须从 target Makefile 直接删除，
+    # nowifi 才能不含 WiFi 组件（否则 wpad 会拉起 hostapd/wpa_supplicant 空转、
+    # ath11k 空包占 rootfs 空间）。
+    # 仅影响本次 nowifi 构建（WiFi 版此前已构建完成）。
+    qca_mk="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/Makefile"
+    if [ -f "$qca_mk" ]; then
+        sed -i 's/\bwpad-openssl\b//g; s/\bkmod-ath11k-ahb\b//g; s/\bkmod-ath11k-pci\b//g; s/\bkmod-ath11k\b//g' "$qca_mk"
+        echo "✓ nowifi: 已从 DEFAULT_PACKAGES 移除 wpad-openssl / kmod-ath11k*"
+    fi
+
     make defconfig
     restrict_to_link_nn6000
     make defconfig

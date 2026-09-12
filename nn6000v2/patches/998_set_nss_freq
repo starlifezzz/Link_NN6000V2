@@ -1,0 +1,22 @@
+#!/bin/sh
+######################################################################
+# 998_set_nss_freq - 将 NSS 频率档位设为 high
+#
+# 背景:
+#   VIKINGYFY 的 nss_freq 服务 (START=95) 按 /etc/config/nss_freq 的
+#   level 设置 NSS 协处理器频率，默认 mid=748.8MHz。
+#   真机实测 high=1497.6MHz（IPQ6018 NSS 满频），NSS 是数据面加速核心，
+#   提频可提升转发吞吐、降低延迟抖动，代价是功耗/发热增加。
+#   本设备 2GB 内存、无 WiFi、散热余量充足（CPU 45°C），故设为 high。
+#
+# 回退: uci set nss_freq.settings.level='mid' && uci commit nss_freq \
+#       && /etc/init.d/nss_freq restart
+######################################################################
+
+[ -f /etc/config/nss_freq ] || exit 0
+
+uci set nss_freq.settings.level='high'
+uci commit nss_freq
+/etc/init.d/nss_freq restart 2>/dev/null
+
+exit 0
