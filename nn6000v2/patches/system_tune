@@ -4,7 +4,7 @@
 # system_tune - 系统级收尾清理/调优（每次开机检查，幂等）
 #
 # 处理项:
-#   1) 确保 rpcd.@login 存在且密码非默认（首次启动时若为默认则改为强随机密码）
+#   1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
 #   2) ext4 挂载加 errors=remount-ro
 #      /overlay 与 /mnt/sda2 默认 errors=continue（I/O 出错继续写），
 #      改为 remount-ro：ext4 检测到错误时转只读，保护数据完整性。
@@ -26,17 +26,17 @@ PROG=system_tune
 apply() {
     local changed=0 sec target opts m
 
-    # 1) 确保 rpcd.@login 存在且密码非默认（首次启动时若为默认则改为强随机密码）
+    # 1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
     if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
         uci add rpcd login
         uci set rpcd.@login[-1].username='root'
-        uci set rpcd.@login[-1].password='$p$'$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
+        uci set rpcd.@login[-1].password=''
         uci add_list rpcd.@login[-1].read='*'
         uci add_list rpcd.@login[-1].write='*'
-        changed=1
-    elif [ "$(uci -q get rpcd.@login[0].password)" = "\$p\$root" ]; then
-        RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
-        uci set rpcd.@login[0].password="\$p\$${RAND_PASS}"
+        echo "rpcd.@login created with empty password"
+    elif [ "$(uci -q get rpcd.@login[0].password)" != "" ]; then
+        uci set rpcd.@login[0].password=''
+        echo "rpcd.@login password cleared"
     fi
 
     # 2) ext4 挂载加 errors=remount-ro
@@ -60,7 +60,7 @@ apply() {
 
     uci commit rpcd 2>/dev/null
     uci commit fstab 2>/dev/null
-    logger -t "system_tune" "system tune applied (rpcd.@login secured / fstab errors=remount-ro)"
+    logger -t "system_tune" "system tune applied (rpcd.@login password cleared / fstab errors=remount-ro)"
 
     # 立即让 errors=remount-ro 生效（运行期执行本脚本时）
     for m in /overlay /mnt/sda2; do
@@ -71,11 +71,11 @@ apply() {
     done
 
     return 0
-}
+end
 
 start() {
     apply
-}
+end
 
 boot() {
     apply
