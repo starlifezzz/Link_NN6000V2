@@ -4,11 +4,7 @@
 # system_tune - 系统级收尾清理/调优（每次开机检查，幂等）
 #
 # 处理项:
-#   1) 删除无用的 rpcd.@login
-#      本固件 Web 栈是 nginx + ubus_interpreter，不装 uhttpd；
-#      rpcd.@login 是 uhttpd 的 ubus HTTP 认证专用配置（默认弱口令
-#      root/$p$root）。对本机无作用且属隐患，直接移除。
-#
+#   1) 确保 rpcd.@login 存在且密码非默认（首次启动时若为默认则改为强随机密码）
 #   2) ext4 挂载加 errors=remount-ro
 #      /overlay 与 /mnt/sda2 默认 errors=continue（I/O 出错继续写），
 #      改为 remount-ro：ext4 检测到错误时转只读，保护数据完整性。
@@ -16,10 +12,8 @@
 #
 # 明确不处理（已核实）:
 #   - /etc/modules.conf 的 `options ecm front_end_selection=`：
-#     由 /etc/init.d/qca-nss-ecm 的 setup_front_end() 维护，且
-#     modinfo ecm 确认 front_end_selection 是有效参数 —— 不可清理。
-#   - USB 写缓存：SanDisk Cruzer Blade 固件不支持通过
-#     scsi_disk/*/cache_type 或 queue/write_cache 切换，
+#     由 qca-nss-ecm init 维护的有效参数，不可清理
+#   - USB 写缓存：SanDisk Cruzer Blade 固件不支持切换，
 #     恒为 write through（该盘 discard_max_bytes 也为 0，不支持 TRIM）。
 #
 # 时序: START=19（在 fstab/block-mount 的 S11 之后）
@@ -32,27 +26,33 @@ PROG=system_tune
 apply() {
     local changed=0 sec target opts m
 
-    # 1) 删除无用的 rpcd.@login（可能多个）
-    while uci -q get rpcd.@login[0] >/dev/null 2>&1; do
-        uci -q delete rpcd.@login[0]
+    # 1) 确保 rpcd.@login 存在且密码非默认（首次启动时若为默认则改为强随机密码）
+    if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
+        uci add rpcd login
+        uci set rpcd.@login[-1].username='root'
+        uci set rpcd.@login[-1].password='$p$'$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
+        uci add_list rpcd.@login[-1].read='*'
+        uci add_list rpcd.@login[-1].write='*'
         changed=1
-    done
+    elif [ "$(uci -q get rpcd.@login[0].password)" = "\$p\$root" ]; then
+        RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
+        uci set rpcd.@login[0].password="\$p\$${RAND_PASS}"
+    fi
 
-    # 2) ext4 持久挂载点加 errors=remount-ro
+    # 2) ext4 挂载加 errors=remount-ro
     for sec in $(uci show fstab 2>/dev/null | sed -n 's/^fstab\.\(.*\)=mount$/\1/p'); do
         target=$(uci -q get "fstab.$sec.target")
         case "$target" in
             /overlay|/mnt/sda2)
                 opts=$(uci -q get "fstab.$sec.options")
                 case ",${opts}," in
-                    *,errors=remount-ro,*)
-                        ;;
+                    *,errors=remount-ro,*) ;;
                     *)
                         uci set "fstab.$sec.options=${opts:+$opts,}errors=remount-ro"
                         changed=1
                         ;;
                 esac
-                ;;
+            ;;
         esac
     done
 
@@ -60,14 +60,14 @@ apply() {
 
     uci commit rpcd 2>/dev/null
     uci commit fstab 2>/dev/null
-    logger -t "$PROG" "system tune applied (rpcd.@login removed / fstab errors=remount-ro)"
+    logger -t "system_tune" "system tune applied (rpcd.@login secured / fstab errors=remount-ro)"
 
-    # 立即让 errors=remount-ro 生效（运行期手动执行本脚本时）
+    # 立即让 errors=remount-ro 生效（运行期执行本脚本时）
     for m in /overlay /mnt/sda2; do
         mountpoint -q "$m" 2>/dev/null || continue
         grep -q "errors=remount-ro" /proc/mounts && continue
         mount -o remount,errors=remount-ro "$m" 2>/dev/null && \
-            logger -t "$PROG" "remounted $m with errors=remount-ro"
+            logger -t "system_tune" "remounted $m with errors=remount-ro"
     done
 
     return 0

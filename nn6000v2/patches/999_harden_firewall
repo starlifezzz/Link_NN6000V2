@@ -1,47 +1,65 @@
 #!/bin/sh
 ######################################################################
+# vim: set ft=sh
 # 999_harden_firewall - 首次启动应用防火墙安全加固
 #
-# 适用: 首次刷机 / 恢复出厂后执行一次（uci-defaults 机制）。
-# 说明: 本脚本只设"默认安全值"，之后用户可自由修改；若修改回不安全
-#       值，由 fix_firewall_harden (init) 在每次开机时自动纠正。
-#
 # 加固项:
-#   1) fullcone NAT 关闭（弱化 NAT 隐藏性的特性）
-#   2) docker zone forward 由 ACCEPT 收紧为 REJECT
+#   1) fullcone NAT 关闭
+#   2) docker zone forward 收紧为 REJECT
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan（避免绑定 WAN 地址提供 DNS）
-#   5) dropbear 仅绑定 lan 网络（不监听全网卡）; Interface 须填逻辑网络名 lan（非 br-lan）
+#   5) dropbear 仅绑定 lan 网络（Interface=lan 逻辑网络名，非 br-lan）
+#   6) rpcd.@login 保留但确保密码非默认（首次启动时若为默认则改为强随机密码）
 #
 # 注意: UPnP 不在本脚本处理范围内（用户要求长期启用，不自动禁用）。
 #
 # 全部操作均带存在性判断，缺 section/包时静默跳过。
 ######################################################################
 
+START=10
+
+PROG=harden_firewall
+
 # 1) fullcone NAT 关闭
 if uci -q get firewall.@defaults[0] >/dev/null 2>&1; then
-	uci set firewall.@defaults[0].fullcone='0'
+    uci set firewall.@defaults[0].fullcone='0'
 fi
 
-# 2) docker zone 转发收紧（zone 可能存在或不存在）
+# 2) docker zone forward 收紧为 REJECT
 if uci -q get firewall.docker >/dev/null 2>&1; then
-	uci set firewall.docker.forward='REJECT'
+    uci set firewall.docker.forward='REJECT'
 fi
 
 # 3) 删除 WAN 侧 linkease(8897) 放行规则
 if uci -q get firewall.linkease >/dev/null 2>&1; then
-	uci -q delete firewall.linkease
+    uci -q delete firewall.linkease
 fi
 
 # 4) dnsmasq 仅监听 lan
 if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
-	uci -q delete dhcp.@dnsmasq[0].interface 2>/dev/null
-	uci add_list dhcp.@dnsmasq[0].interface='lan'
+    uci -q delete dhcp.@dnsmasq[0].interface 2>/dev/null
+    uci add_list dhcp.@dnsmasq[0].interface='lan'
 fi
 
-# 5) dropbear 仅绑定 br-lan
+# 5) dropbear 仅绑定 lan 网络（Interface=lan 逻辑网络名，非 br-lan）
 if uci -q get dropbear.main >/dev/null 2>&1; then
-	uci set dropbear.main.Interface='lan'
+    uci set dropbear.main.Interface='lan'
+fi
+
+# 6) rpcd.@login 保留但确保密码非默认（首次启动时若为默认则改为强随机密码）
+if uci -q get rpcd.@login[0] >/dev/null 2>&1; then
+    if [ "$(uci -q get rpcd.@login[0].password)" = "\$p\$root" ]; then
+        RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
+        uci set rpcd.@login[0].password="\$p\$${RAND_PASS}"
+    fi
+else
+    # 如果不存在则创建一个强密码
+    uci add rpcd login
+    uci set rpcd.@login[-1].username='root'
+    RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
+    uci set rpcd.@login[-1].password="\$p\$${RAND_PASS}"
+    uci add_list rpcd.@login[-1].read='*'
+    uci add_list rpcd.@login[-1].write='*'
 fi
 
 uci commit firewall 2>/dev/null
