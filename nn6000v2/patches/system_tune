@@ -60,7 +60,7 @@ apply() {
 
     uci commit rpcd 2>/dev/null
     uci commit fstab 2>/dev/null
-    logger -t "system_tune" "system tune applied (rpcd.@login password cleared / fstab errors=remount-ro)"
+    logger -t "system_tune" "system tune applied (rpcd.@login secured / fstab errors=remount-ro)"
 
     # 立即让 errors=remount-ro 生效（运行期执行本脚本时）
     for m in /overlay /mnt/sda2; do
