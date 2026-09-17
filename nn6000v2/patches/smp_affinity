@@ -50,7 +50,7 @@ cpus_to_bitmask() {
 
 bitmask_to_cpus() {
 
-    [ "${1:0:2}" != "0x" ] && set -- "0x$1"
+    case "$1" in 0x*) ;; *) set -- "0x$1" ;; esac
     local bitmask="$(printf '%d' "$1")"
 
     local cpus=""

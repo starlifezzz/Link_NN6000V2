@@ -1,6 +1,6 @@
 #!/bin/sh
-if [ ! -f /etc/config/argon ]; then
-    touch /etc/config/argon
+if ! uci -q get argon.@global[0] >/dev/null 2>&1; then
+    [ -f /etc/config/argon ] || touch /etc/config/argon
     uci add argon global
 fi
 

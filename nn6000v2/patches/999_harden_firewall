@@ -9,7 +9,7 @@
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan（避免绑定 WAN 地址提供 DNS）
 #   5) dropbear 仅绑定 lan 网络（Interface=lan 逻辑网络名，非 br-lan）
-#   6) rpcd.@login 保留但确保密码非默认（首次启动时若为默认则改为强随机密码）
+#   6) rpcd.@login 确保存在且密码为空（空密码=用户可直接登录 LuCI）
 #
 # 注意: UPnP 不在本脚本处理范围内（用户要求长期启用，不自动禁用）。
 #
@@ -46,20 +46,19 @@ if uci -q get dropbear.main >/dev/null 2>&1; then
     uci set dropbear.main.Interface='lan'
 fi
 
-# 6) rpcd.@login 保留但确保密码非默认（首次启动时若为默认则改为强随机密码）
-if uci -q get rpcd.@login[0] >/dev/null 2>&1; then
-    if [ "$(uci -q get rpcd.@login[0].password)" = "\$p\$root" ]; then
-        RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
-        uci set rpcd.@login[0].password="\$p\$${RAND_PASS}"
-    fi
-else
-    # 如果不存在则创建一个强密码
+# 6) rpcd.@login 确保存在且密码为空（空密码=用户直接登录，无需密码）
+#    ⚠️ 不生成随机密码 — 随机密码会导致用户无法从 Web 登录
+#    由 system_tune (START=19) 在每次开机时持续保障
+if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
     uci add rpcd login
     uci set rpcd.@login[-1].username='root'
-    RAND_PASS=$(head -c 16 /dev/urandom | base64 | tr -d '\n' | cut -c1-16)
-    uci set rpcd.@login[-1].password="\$p\$${RAND_PASS}"
+    uci set rpcd.@login[-1].password=''
     uci add_list rpcd.@login[-1].read='*'
     uci add_list rpcd.@login[-1].write='*'
+    uci commit rpcd 2>/dev/null
+elif [ "$(uci -q get rpcd.@login[0].password)" != "" ]; then
+    uci set rpcd.@login[0].password=''
+    uci commit rpcd 2>/dev/null
 fi
 
 uci commit firewall 2>/dev/null

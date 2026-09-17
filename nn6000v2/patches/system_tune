@@ -24,7 +24,7 @@ START=19
 PROG=system_tune
 
 apply() {
-    local changed=0 sec target opts m
+    local rpcd_changed=0 fstab_changed=0 sec target opts m
 
     # 1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
     if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
@@ -33,9 +33,11 @@ apply() {
         uci set rpcd.@login[-1].password=''
         uci add_list rpcd.@login[-1].read='*'
         uci add_list rpcd.@login[-1].write='*'
+        rpcd_changed=1
         echo "rpcd.@login created with empty password"
     elif [ "$(uci -q get rpcd.@login[0].password)" != "" ]; then
         uci set rpcd.@login[0].password=''
+        rpcd_changed=1
         echo "rpcd.@login password cleared"
     fi
 
@@ -49,33 +51,41 @@ apply() {
                     *,errors=remount-ro,*) ;;
                     *)
                         uci set "fstab.$sec.options=${opts:+$opts,}errors=remount-ro"
-                        changed=1
+                        fstab_changed=1
                         ;;
                 esac
             ;;
         esac
     done
 
-    [ "$changed" = "0" ] && return 0
+    # 提交 rpcd 变更（独立于 fstab，确保 rpcd 密码修改不会因 fstab 无变化而丢失）
+    if [ "$rpcd_changed" = "1" ]; then
+        uci commit rpcd 2>/dev/null
+        # rpcd 可能已用旧配置启动，需重启以加载新密码策略
+        /etc/init.d/rpcd restart 2>/dev/null
+        logger -t "$PROG" "rpcd.@login password cleared and rpcd restarted"
+    fi
 
-    uci commit rpcd 2>/dev/null
-    uci commit fstab 2>/dev/null
-    logger -t "system_tune" "system tune applied (rpcd.@login secured / fstab errors=remount-ro)"
+    # 提交 fstab 变更
+    if [ "$fstab_changed" = "1" ]; then
+        uci commit fstab 2>/dev/null
+        logger -t "$PROG" "fstab errors=remount-ro applied"
 
-    # 立即让 errors=remount-ro 生效（运行期执行本脚本时）
-    for m in /overlay /mnt/sda2; do
-        mountpoint -q "$m" 2>/dev/null || continue
-        grep -q "errors=remount-ro" /proc/mounts && continue
-        mount -o remount,errors=remount-ro "$m" 2>/dev/null && \
-            logger -t "system_tune" "remounted $m with errors=remount-ro"
-    done
+        # 立即让 errors=remount-ro 生效（运行期执行本脚本时）
+        for m in /overlay /mnt/sda2; do
+            mountpoint -q "$m" 2>/dev/null || continue
+            grep -q "errors=remount-ro" /proc/mounts && continue
+            mount -o remount,errors=remount-ro "$m" 2>/dev/null && \
+                logger -t "$PROG" "remounted $m with errors=remount-ro"
+        done
+    fi
 
     return 0
-end
+}
 
 start() {
     apply
-end
+}
 
 boot() {
     apply
