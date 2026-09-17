@@ -56,7 +56,8 @@ if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
     uci add_list rpcd.@login[-1].read='*'
     uci add_list rpcd.@login[-1].write='*'
     uci commit rpcd 2>/dev/null
-elif [ "$(uci -q get rpcd.@login[0].password)" != "" ]; then
+elif uci -q get rpcd.@login[0].password 2>/dev/null | grep -q .; then
+    # grep -q 判断是否有输出（绕过 $p$root 被 shell 变量展开成空字符串的问题）
     uci set rpcd.@login[0].password=''
     uci commit rpcd 2>/dev/null
 fi

@@ -1,0 +1,166 @@
+#!/bin/sh
+######################################################################
+# luci_diag - LuCI 登录故障一键诊断脚本
+# 用法: sh /tmp/luci_diag.sh
+# 放到路由器后: scp luci_diag.sh root@10.0.0.1:/tmp/ && ssh root@10.0.0.1 'sh /tmp/luci_diag.sh'
+######################################################################
+
+echo "============================================"
+echo "  LuCI 登录故障诊断 v2"
+echo "  $(date)"
+echo "============================================"
+echo ""
+
+# 1) rpcd 配置状态
+echo ">>> 1. rpcd 配置状态"
+echo "--- /etc/config/rpcd ---"
+if [ -f /etc/config/rpcd ]; then
+    cat /etc/config/rpcd
+else
+    echo "[ERROR] /etc/config/rpcd 不存在！"
+fi
+echo ""
+
+# rpcd 密码的原始字节（hex dump，防止 $p$root 被 shell 展开）
+echo "--- rpcd 密码原始值 (hex) ---"
+if uci -q get rpcd.@login[0].password >/dev/null 2>&1; then
+    RAW_PASS=$(uci -q get rpcd.@login[0].password)
+    echo "uci get 返回: [$RAW_PASS]"
+    echo -n "hex dump:    "
+    echo -n "$RAW_PASS" | xxd | head -1
+    echo -n "长度:        "
+    echo -n "$RAW_PASS" | wc -c
+    # 判断密码状态
+    if [ -z "$RAW_PASS" ]; then
+        echo "状态:        ✅ 密码为空（应可直接登录）"
+    else
+        echo "状态:        ⚠️  密码非空 = [$RAW_PASS]"
+        # 检测是否是 $p$root（shell 展开问题的标志）
+        if [ "$RAW_PASS" = "" ] && [ "$(uci -q get rpcd.@login[0].password 2>/dev/null | xxd | head -1)" != "" ]; then
+            echo "             ⚠️  密码值被 shell 变量展开成空！实际 uci 里有值"
+        fi
+    fi
+else
+    echo "[ERROR] rpcd.@login[0] 不存在！"
+fi
+echo ""
+
+# 2) rpcd 进程状态
+echo ">>> 2. rpcd 进程状态"
+if pgrep -x rpcd >/dev/null 2>&1; then
+    echo "rpcd PID: $(pgrep -x rpcd)"
+    echo "rpcd 状态: 运行中"
+else
+    echo "[ERROR] rpcd 未运行！"
+fi
+echo ""
+
+# 3) uci-defaults 执行状态
+echo ">>> 3. uci-defaults 脚本状态"
+echo "--- /etc/uci-defaults/ 目录 ---"
+ls -la /etc/uci-defaults/ 2>/dev/null || echo "[ERROR] /etc/uci-defaults/ 不存在"
+echo ""
+echo "--- 已执行的 uci-defaults (标记文件) ---"
+ls -la /tmp/.uci-defaults-* 2>/dev/null || echo "(无标记文件)"
+echo ""
+echo "---999_harden_firewall 是否还在 uci-defaults ---"
+if [ -f /etc/uci-defaults/999_harden_firewall ]; then
+    echo "存在: 是（首次开机后应被删除或移到标记目录）"
+else
+    echo "存在: 否（已执行并被清理）"
+fi
+echo ""
+
+# 4) system_tune 状态
+echo ">>> 4. system_tune init.d 状态"
+if [ -f /etc/init.d/system_tune ]; then
+    echo "init.d 脚本: 存在"
+    echo "START 优先级: $(grep '^START=' /etc/init.d/system_tune 2>/dev/null)"
+else
+    echo "[WARN] /etc/init.d/system_tune 不存在"
+fi
+echo ""
+
+# 5) dropbear 状态
+echo ">>> 5. dropbear 状态"
+if pgrep -x dropbear >/dev/null 2>&1; then
+    echo "dropbear PID: $(pgrep -x dropbear)"
+else
+    echo "[WARN] dropbear 未运行（SSH 不可用）"
+fi
+echo "dropbear Interface: $(uci -q get dropbear.main.Interface 2>/dev/null || echo '未设置')"
+echo ""
+
+# 6) overlay 状态
+echo ">>> 6. overlay / 存储状态"
+echo "挂载点:"
+mount | grep -E '(overlay|sda|mmcblk)' || echo "(无相关挂载)"
+echo ""
+echo "df -h:"
+df -h 2>/dev/null | grep -E '(overlay|sda|mmcblk|Filesystem)' || df -h
+echo ""
+
+# 7) fstab 配置
+echo ">>> 7. fstab 配置"
+uci show fstab 2>/dev/null || echo "(fstab 为空)"
+echo ""
+
+# 8) uci commit 测试
+echo ">>> 8. uci 写入测试"
+uci set test_diag.test=1 2>/dev/null
+if uci commit test_diag 2>/dev/null; then
+    echo "uci commit: ✅ 正常"
+else
+    echo "[ERROR] uci commit 失败！（overlay 可能只读）"
+fi
+uci delete test_diag 2>/dev/null
+uci commit test_diag 2>/dev/null
+echo ""
+
+# 9) overlay 只读检测
+echo ">>> 9. overlay 只读检测"
+if touch /etc/test_write_check 2>/dev/null; then
+    rm -f /etc/test_write_check
+    echo "overlay 写入: ✅ 正常"
+else
+    echo "[ERROR] overlay 不可写！（这会导致 uci commit 失败）"
+fi
+echo ""
+
+# 10) ubus 认证测试
+echo ">>> 10. ubus 认证测试"
+if ubus -t 2 call session create '{"username":"root","password":""}' 2>/dev/null; then
+    echo "空密码 ubus 认证: ✅ 成功"
+else
+    echo "空密码 ubus 认证: ❌ 失败"
+fi
+if ubus -t 2 call session create '{"username":"root","password":"root"}' 2>/dev/null; then
+    echo "密码 root ubus 认证: ✅ 成功"
+else
+    echo "密码 root ubus 认证: ❌ 失败"
+fi
+echo ""
+
+# 11) 检查关键 init 脚本的启动顺序
+echo ">>> 11. 关键 init 脚本启动顺序"
+for s in rpcd system_tune fix_firewall_harden smp_affinity; do
+    f="/etc/init.d/$s"
+    if [ -f "$f" ]; then
+        start=$(grep '^START=' "$f" | cut -d= -f2)
+        echo "  $s: START=$start"
+    fi
+done
+echo ""
+
+# 12) 检查999_harden_firewall 最终状态
+echo ">>> 12. firewall / dhcp / dropbear 最终状态"
+echo "firewall fullcone: $(uci -q get firewall.@defaults[0].fullcone)"
+echo "firewall docker forward: $(uci -q get firewall.docker.forward)"
+echo "dhcp interface: $(uci -q get dhcp.@dnsmasq[0].interface)"
+echo "dropbear Interface: $(uci -q get dropbear.main.Interface)"
+echo ""
+
+echo "============================================"
+echo "  诊断完成"
+echo "  如有问题，请把以上输出全部复制发出来"
+echo "============================================"

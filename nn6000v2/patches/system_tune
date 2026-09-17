@@ -35,7 +35,8 @@ apply() {
         uci add_list rpcd.@login[-1].write='*'
         rpcd_changed=1
         echo "rpcd.@login created with empty password"
-    elif [ "$(uci -q get rpcd.@login[0].password)" != "" ]; then
+    elif uci -q get rpcd.@login[0].password 2>/dev/null | grep -q .; then
+        # grep -q 判断是否有输出（绕过 $p$root 被 shell 变量展开成空字符串的问题）
         uci set rpcd.@login[0].password=''
         rpcd_changed=1
         echo "rpcd.@login password cleared"

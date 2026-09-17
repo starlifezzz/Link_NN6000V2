@@ -36,6 +36,28 @@ REPO_BRANCH=${REPO_BRANCH:-main}
 BUILD_DIR=${BUILD_DIR:-imm-nss}
 COMMIT_HASH=${COMMIT_HASH:-none}
 
+# 给固件文件添加版本号后缀
+# 用法: rename_firmware <目录> [后缀]
+# 例: rename_firmware ./firmware _nowifi
+rename_firmware() {
+    local dir="$1"
+    local suffix="${2:-}"
+    local ver="${VERSION:-$(date +%y.%m.%d)}"
+    [ -d "$dir" ] || return 0
+    find "$dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*.img.gz" \) | while read -r f; do
+        local base=$(basename "$f")
+        local name="${base%.*}"
+        local ext="${base##*.}"
+        # 已有版本号的不重复添加
+        if echo "$name" | grep -qE '[0-9]{2}\.[0-9]{2}\.[0-9]{2}'; then
+            continue
+        fi
+        local newname="${name}_${ver}${suffix}.${ext}"
+        mv -f "$f" "$dir/$newname"
+        echo "Rename: $base -> $newname"
+    done
+}
+
 remove_uhttpd_dependency() {
     local config_path="$BASE_PATH/../$BUILD_DIR/.config"
     local luci_makefile_path="$BASE_PATH/../$BUILD_DIR/feeds/luci/collections/luci/Makefile"
@@ -247,6 +269,9 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     mkdir -p "$FIRMWARE_DIR"
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) -exec cp -f {} "$FIRMWARE_DIR/" \;
     
+    # 给 WiFi 版固件加版本号后缀
+    rename_firmware "$FIRMWARE_DIR"
+    
     # 生成 nowifi 版本的 .config（通过管道生成，不修改源配置，避免中途失败污染源文件）
     cd "$BASE_PATH/../$BUILD_DIR"
     
@@ -290,6 +315,9 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         echo "Copying: $filename -> $new_filename"
         cp -f "$file" "$FIRMWARE_DIR/$new_filename"
     done
+    
+    # 给 nowifi 版固件加版本号后缀
+    rename_firmware "$FIRMWARE_DIR" ""
     
     echo ""
     echo "=============================================="
