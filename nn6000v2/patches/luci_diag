@@ -27,19 +27,19 @@ if uci -q get rpcd.@login[0].password >/dev/null 2>&1; then
     RAW_PASS=$(uci -q get rpcd.@login[0].password)
     echo "uci get 返回: [$RAW_PASS]"
     echo -n "hex dump:    "
-    echo -n "$RAW_PASS" | xxd | head -1
+    echo -n "$RAW_PASS" | od -A x -t x1z -v | head -1
     echo -n "长度:        "
     echo -n "$RAW_PASS" | wc -c
-    # 判断密码状态
-    if [ -z "$RAW_PASS" ]; then
-        echo "状态:        ✅ 密码为空（应可直接登录）"
-    else
-        echo "状态:        ⚠️  密码非空 = [$RAW_PASS]"
-        # 检测是否是 $p$root（shell 展开问题的标志）
-        if [ "$RAW_PASS" = "" ] && [ "$(uci -q get rpcd.@login[0].password 2>/dev/null | xxd | head -1)" != "" ]; then
-            echo "             ⚠️  密码值被 shell 变量展开成空！实际 uci 里有值"
-        fi
-    fi
+    # 判断密码状态（用 case 避免 $p$root 被 shell 变量展开）
+    # 注意：绝对不能用 [ -z "$RAW_PASS" ]，因为 $p$root 会被展开成空字符串！
+    case "$RAW_PASS" in
+        "")
+            echo "状态:        ✅ 密码为空（应可直接登录）"
+            ;;
+        *)
+            echo "状态:        ⚠️  密码非空 = [$RAW_PASS]"
+            ;;
+    esac
 else
     echo "[ERROR] rpcd.@login[0] 不存在！"
 fi
