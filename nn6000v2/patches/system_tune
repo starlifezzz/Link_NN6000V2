@@ -27,20 +27,21 @@ apply() {
     local rpcd_changed=0 fstab_changed=0 sec target opts m
 
     # 1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
+    #    ImmortalWrt 默认有 config login 但没有 option password 字段，
+    #    elif 只在 password 有值时清空 → 字段不存在时两分支都不执行 → LuCI 403。
+    #    修复：login 不存在则创建；login 存在则一律 set password=''（自动创建字段）。
     if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
         uci add rpcd login
         uci set rpcd.@login[-1].username='root'
-        uci set rpcd.@login[-1].password=''
         uci add_list rpcd.@login[-1].read='*'
         uci add_list rpcd.@login[-1].write='*'
         rpcd_changed=1
-        echo "rpcd.@login created with empty password"
-    elif uci -q get rpcd.@login[0].password 2>/dev/null | grep -q .; then
-        # grep -q 判断是否有输出（绕过 $p$root 被 shell 变量展开成空字符串的问题）
-        uci set rpcd.@login[0].password=''
-        rpcd_changed=1
-        echo "rpcd.@login password cleared"
+        echo "rpcd.@login created"
     fi
+    # 无论 login 是新创建还是已存在，一律确保 password 字段存在且为空
+    # uci set 对不存在的字段会自动创建，对已存在的字段会覆盖
+    uci set rpcd.@login[0].password=''
+    rpcd_changed=1
 
     # 2) ext4 挂载加 errors=remount-ro
     for sec in $(uci show fstab 2>/dev/null | sed -n 's/^fstab\.\(.*\)=mount$/\1/p'); do

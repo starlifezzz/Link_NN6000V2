@@ -1,166 +1,158 @@
 #!/bin/sh
 ######################################################################
-# luci_diag - LuCI 登录故障一键诊断脚本
-# 用法: sh /tmp/luci_diag.sh
-# 放到路由器后: scp luci_diag.sh root@10.0.0.1:/tmp/ && ssh root@10.0.0.1 'sh /tmp/luci_diag.sh'
+# luci_diag v3 - LuCI 登录故障诊断（测完整 HTTP 链路）
+# 用法: luci_diag
 ######################################################################
 
 echo "============================================"
-echo "  LuCI 登录故障诊断 v2"
+echo "  LuCI 登录故障诊断 v3"
 echo "  $(date)"
 echo "============================================"
 echo ""
 
-# 1) rpcd 配置状态
-echo ">>> 1. rpcd 配置状态"
-echo "--- /etc/config/rpcd ---"
-if [ -f /etc/config/rpcd ]; then
-    cat /etc/config/rpcd
-else
-    echo "[ERROR] /etc/config/rpcd 不存在！"
-fi
+# ---- 1. rpcd 配置 ----
+echo ">>> 1. rpcd 配置"
+cat /etc/config/rpcd 2>/dev/null || echo "[ERROR] /etc/config/rpcd 不存在"
 echo ""
 
-# rpcd 密码的原始字节（hex dump，防止 $p$root 被 shell 展开）
-echo "--- rpcd 密码原始值 (hex) ---"
+# ---- 2. rpcd 密码原始值 ----
+echo ">>> 2. rpcd 密码原始值 (od hex dump)"
 if uci -q get rpcd.@login[0].password >/dev/null 2>&1; then
-    RAW_PASS=$(uci -q get rpcd.@login[0].password)
-    echo "uci get 返回: [$RAW_PASS]"
-    echo -n "hex dump:    "
-    echo -n "$RAW_PASS" | od -A x -t x1z -v | head -1
-    echo -n "长度:        "
-    echo -n "$RAW_PASS" | wc -c
-    # 判断密码状态（用 case 避免 $p$root 被 shell 变量展开）
-    # 注意：绝对不能用 [ -z "$RAW_PASS" ]，因为 $p$root 会被展开成空字符串！
-    case "$RAW_PASS" in
-        "")
-            echo "状态:        ✅ 密码为空（应可直接登录）"
-            ;;
-        *)
-            echo "状态:        ⚠️  密码非空 = [$RAW_PASS]"
-            ;;
-    esac
+    RAW=$(uci -q get rpcd.@login[0].password)
+    echo "uci get 返回: [$RAW]"
+    echo -n "hex: "
+    echo -n "$RAW" | od -A n -t x1 | tr -s ' '
+    echo -n "字节数: "
+    echo -n "$RAW" | wc -c | tr -d ' '
+    echo ""
 else
-    echo "[ERROR] rpcd.@login[0] 不存在！"
+    echo "uci get rpcd.@login[0].password 失败（字段不存在）"
+    echo "这意味着 rpcd 配置里没有 password 字段"
 fi
 echo ""
 
-# 2) rpcd 进程状态
-echo ">>> 2. rpcd 进程状态"
-if pgrep -x rpcd >/dev/null 2>&1; then
-    echo "rpcd PID: $(pgrep -x rpcd)"
-    echo "rpcd 状态: 运行中"
-else
-    echo "[ERROR] rpcd 未运行！"
-fi
-echo ""
-
-# 3) uci-defaults 执行状态
-echo ">>> 3. uci-defaults 脚本状态"
-echo "--- /etc/uci-defaults/ 目录 ---"
-ls -la /etc/uci-defaults/ 2>/dev/null || echo "[ERROR] /etc/uci-defaults/ 不存在"
-echo ""
-echo "--- 已执行的 uci-defaults (标记文件) ---"
-ls -la /tmp/.uci-defaults-* 2>/dev/null || echo "(无标记文件)"
-echo ""
-echo "---999_harden_firewall 是否还在 uci-defaults ---"
-if [ -f /etc/uci-defaults/999_harden_firewall ]; then
-    echo "存在: 是（首次开机后应被删除或移到标记目录）"
-else
-    echo "存在: 否（已执行并被清理）"
-fi
-echo ""
-
-# 4) system_tune 状态
-echo ">>> 4. system_tune init.d 状态"
-if [ -f /etc/init.d/system_tune ]; then
-    echo "init.d 脚本: 存在"
-    echo "START 优先级: $(grep '^START=' /etc/init.d/system_tune 2>/dev/null)"
-else
-    echo "[WARN] /etc/init.d/system_tune 不存在"
-fi
-echo ""
-
-# 5) dropbear 状态
-echo ">>> 5. dropbear 状态"
-if pgrep -x dropbear >/dev/null 2>&1; then
-    echo "dropbear PID: $(pgrep -x dropbear)"
-else
-    echo "[WARN] dropbear 未运行（SSH 不可用）"
-fi
-echo "dropbear Interface: $(uci -q get dropbear.main.Interface 2>/dev/null || echo '未设置')"
-echo ""
-
-# 6) overlay 状态
-echo ">>> 6. overlay / 存储状态"
-echo "挂载点:"
-mount | grep -E '(overlay|sda|mmcblk)' || echo "(无相关挂载)"
-echo ""
-echo "df -h:"
-df -h 2>/dev/null | grep -E '(overlay|sda|mmcblk|Filesystem)' || df -h
-echo ""
-
-# 7) fstab 配置
-echo ">>> 7. fstab 配置"
-uci show fstab 2>/dev/null || echo "(fstab 为空)"
-echo ""
-
-# 8) uci commit 测试
-echo ">>> 8. uci 写入测试"
-uci set test_diag.test=1 2>/dev/null
-if uci commit test_diag 2>/dev/null; then
-    echo "uci commit: ✅ 正常"
-else
-    echo "[ERROR] uci commit 失败！（overlay 可能只读）"
-fi
-uci delete test_diag 2>/dev/null
-uci commit test_diag 2>/dev/null
-echo ""
-
-# 9) overlay 只读检测
-echo ">>> 9. overlay 只读检测"
-if touch /etc/test_write_check 2>/dev/null; then
-    rm -f /etc/test_write_check
-    echo "overlay 写入: ✅ 正常"
-else
-    echo "[ERROR] overlay 不可写！（这会导致 uci commit 失败）"
-fi
-echo ""
-
-# 10) ubus 认证测试
-echo ">>> 10. ubus 认证测试"
-if ubus -t 2 call session create '{"username":"root","password":""}' 2>/dev/null; then
-    echo "空密码 ubus 认证: ✅ 成功"
-else
-    echo "空密码 ubus 认证: ❌ 失败"
-fi
-if ubus -t 2 call session create '{"username":"root","password":"root"}' 2>/dev/null; then
-    echo "密码 root ubus 认证: ✅ 成功"
-else
-    echo "密码 root ubus 认证: ❌ 失败"
-fi
-echo ""
-
-# 11) 检查关键 init 脚本的启动顺序
-echo ">>> 11. 关键 init 脚本启动顺序"
-for s in rpcd system_tune fix_firewall_harden smp_affinity; do
-    f="/etc/init.d/$s"
-    if [ -f "$f" ]; then
-        start=$(grep '^START=' "$f" | cut -d= -f2)
-        echo "  $s: START=$start"
+# ---- 3. 关键进程 ----
+echo ">>> 3. 关键进程"
+for p in rpcd nginx uwsgi; do
+    pid=$(pgrep -x "$p" 2>/dev/null | head -1)
+    if [ -n "$pid" ]; then
+        echo "$p: PID=$pid ✅"
+    else
+        echo "$p: ❌ 未运行"
     fi
 done
 echo ""
 
-# 12) 检查999_harden_firewall 最终状态
-echo ">>> 12. firewall / dhcp / dropbear 最终状态"
-echo "firewall fullcone: $(uci -q get firewall.@defaults[0].fullcone)"
-echo "firewall docker forward: $(uci -q get firewall.docker.forward)"
-echo "dhcp interface: $(uci -q get dhcp.@dnsmasq[0].interface)"
-echo "dropbear Interface: $(uci -q get dropbear.main.Interface)"
+# ---- 4. nginx 配置 ----
+echo ">>> 4. nginx LuCI 配置"
+if [ -f /etc/nginx/conf.d/luci.locations ]; then
+    cat /etc/nginx/conf.d/luci.locations
+elif [ -f /etc/nginx/uwsgi Location ]; then
+    cat /etc/nginx/uwsgi\ Location
+else
+    echo "尝试查找 luci nginx 配置..."
+    grep -rl "luci\|uwsgi" /etc/nginx/ 2>/dev/null | head -5
+    for f in $(grep -rl "luci\|uwsgi" /etc/nginx/ 2>/dev/null | head -5); do
+        echo "--- $f ---"
+        cat "$f"
+        echo ""
+    done
+fi
+echo ""
+
+# ---- 5. uwsgi luci 配置 ----
+echo ">>> 5. uwsgi luci 配置"
+cat /etc/uwsgi/vassals/luci-webui.ini 2>/dev/null || echo "luci-webui.ini 不存在"
+echo ""
+
+# ---- 6. uwsgi socket 状态 ----
+echo ">>> 6. uwsgi socket 状态"
+ls -la /var/run/luci-webui.socket 2>/dev/null || echo "/var/run/luci-webui.socket 不存在"
+ls -la /var/run/uwsgi/ 2>/dev/null || echo "/var/run/uwsgi/ 不存在"
+echo ""
+
+# ---- 7. LuCGI 端点测试 (curl 127.0.0.1) ----
+echo ">>> 7. LuCGI 端点测试"
+echo "--- 测试 /cgi-bin/luci (未认证) ---"
+RESP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/cgi-bin/luci 2>/dev/null)
+echo "HTTP 状态码: $RESP"
+echo ""
+
+echo "--- 测试 /cgi-bin/luci (带空密码登录) ---"
+RESP=$(curl -s -D- -o /tmp/luci_login_body.html \
+    -X POST http://127.0.0.1/cgi-bin/luci \
+    -d "luci_username=root&luci_password=" 2>/dev/null)
+echo "响应头:"
+echo "$RESP" | head -20
+echo ""
+echo "响应体前500字符:"
+head -c 500 /tmp/luci_login_body.html 2>/dev/null
+echo ""
+echo ""
+
+echo "--- 测试 /cgi-bin/luci (带密码 root 登录) ---"
+RESP=$(curl -s -D- -o /tmp/luci_login_body2.html \
+    -X POST http://10.0.0.1/cgi-bin/luci \
+    -d "luci_username=root&luci_password=root" 2>/dev/null)
+echo "响应头:"
+echo "$RESP" | head -20
+echo ""
+echo "响应体前500字符:"
+head -c 500 /tmp/luci_login_body2.html 2>/dev/null
+echo ""
+echo ""
+
+# ---- 8. 通过 uwsgi socket 直接测试 ----
+echo ">>> 8. uwsgi socket 直接测试"
+if [ -S /var/run/luci-webui.socket ]; then
+    echo "--- uwsgi 协议直接连 /cgi-bin/luci ---"
+    # 用 uwsgi 协议发一个 GET /cgi-bin/luci
+    printf '\x00\x01\x00\x05\x00\x0dSCRIPT_NAME\x00\x09/cgi-bin\x00\x0bPATH_INFO\x00\x05/luci\x00\x0dREQUEST_METHOD\x00\x03GET\x00\x0fSERVER_PROTOCOL\x00\x08HTTP/1.0\x00\x0bSERVER_NAME\x00\x09127.0.0.1\x00\x0cSERVER_PORT\x00\x0580\x00\x0cQUERY_STRING\x00\x00\x09SERVER_SOFTWARE\x00\x02uwsgi\x00\x10uwsgi.version\x00\x0201\x00\x0bREMOTE_ADDR\x00\x09127.0.0.1\x00\x0cREMOTE_PORT\x00\x050000\x00\x0cDOCUMENT_ROOT\x00\x01/\x00\x0bREQUEST_URI\x00\x0b/cgi-bin/luci\x00\x08HTTP_HOST\x00\x09127.0.0.1\x00' | timeout 3 socat - UNIX-CONNECT:/var/run/luci-webui.socket 2>/dev/null | head -30
+    echo ""
+else
+    echo "uwsgi socket 不存在，跳过"
+fi
+echo ""
+
+# ---- 9. dispatcher.uc 检查 ----
+echo ">>> 9. dispatcher.uc 关键文件"
+ls -la /usr/lib/lua/luci/controller/ 2>/dev/null | head -10
+ls -la /usr/lib/lua/luci/dispatcher.lua 2>/dev/null
+ls -la /www/cgi-bin/luci 2>/dev/null
+ls -la /www/cgi-bin/luci-* 2>/dev/null
+echo ""
+
+# ---- 10. LuCI session 文件 ----
+echo ">>> 10. LuCI session 文件"
+ls -la /tmp/luci-* 2>/dev/null || echo "/tmp/luci-* 不存在"
+ls -la /tmp/sessions/ 2>/dev/null || echo "/tmp/sessions/ 不存在"
+echo ""
+
+# ---- 11. 日志中 LuCI 相关 ----
+echo ">>> 11. 最近 LuCI/rpcd/nginx/uwsgi 日志"
+logread 2>/dev/null | grep -iE '(luci|rpcd|uwsgi|nginx|session|login|auth)' | tail -30
+echo ""
+
+# ---- 12. overlay 写入 + uci commit ----
+echo ">>> 12. overlay 写入测试"
+if touch /etc/_diag_test 2>/dev/null; then
+    rm -f /etc/_diag_test
+    echo "overlay 写入: ✅"
+else
+    echo "overlay 写入: ❌"
+fi
+echo "uci commit 测试:"
+uci set _diag.test=1 2>/dev/null
+if uci commit _diag 2>/dev/null; then
+    echo "uci commit: ✅"
+else
+    echo "uci commit: ❌"
+    # 显示详细错误
+    uci commit _diag 2>&1
+fi
+uci delete _diag 2>/dev/null
 echo ""
 
 echo "============================================"
-echo "  诊断完成"
-echo "  如有问题，请把以上输出全部复制发出来"
+echo "  诊断完成 - 请全部复制发出来"
 echo "============================================"

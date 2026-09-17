@@ -49,18 +49,19 @@ fi
 # 6) rpcd.@login 确保存在且密码为空（空密码=用户直接登录，无需密码）
 #    ⚠️ 不生成随机密码 — 随机密码会导致用户无法从 Web 登录
 #    由 system_tune (START=19) 在每次开机时持续保障
+#
+#    ImmortalWrt 默认 rpcd 配置有 config login 但**没有 option password 字段**，
+#    旧版 elif 只在 password 有值时才清空 → 字段不存在时两个分支都不执行 →
+#    LuCI dispatcher 找不到 password 字段 → 登录全部 403。
+#    修复：login 存在时一律 set password=''（uci set 对不存在的字段会自动创建）。
 if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
     uci add rpcd login
     uci set rpcd.@login[-1].username='root'
-    uci set rpcd.@login[-1].password=''
     uci add_list rpcd.@login[-1].read='*'
     uci add_list rpcd.@login[-1].write='*'
-    uci commit rpcd 2>/dev/null
-elif uci -q get rpcd.@login[0].password 2>/dev/null | grep -q .; then
-    # grep -q 判断是否有输出（绕过 $p$root 被 shell 变量展开成空字符串的问题）
-    uci set rpcd.@login[0].password=''
-    uci commit rpcd 2>/dev/null
 fi
+uci set rpcd.@login[0].password=''
+uci commit rpcd 2>/dev/null
 
 uci commit firewall 2>/dev/null
 uci commit dhcp 2>/dev/null
