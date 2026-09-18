@@ -50,17 +50,20 @@ fi
 #    ⚠️ 不生成随机密码 — 随机密码会导致用户无法从 Web 登录
 #    由 system_tune (START=19) 在每次开机时持续保障
 #
-#    ImmortalWrt 默认 rpcd 配置有 config login 但**没有 option password 字段**，
-#    旧版 elif 只在 password 有值时才清空 → 字段不存在时两个分支都不执行 →
-#    LuCI dispatcher 找不到 password 字段 → 登录全部 403。
-#    修复：login 存在时一律 set password=''（uci set 对不存在的字段会自动创建）。
+#    关键: rpcd 用 crypt() 校验密码，option password 必须是 crypt hash 格式。
+#    - uci set password='' 不持久化（uci 把空字符串当删除）
+#    - 明文如 'test' 会被 crypt('test','test') 校验失败
+#    - 必须写入 crypt("", salt) 的 hash 值才能匹配空密码登录
+EMPTY_HASH=$(openssl passwd -1 -salt luci '' 2>/dev/null || echo '$1$luci$kwi0krvQO9W2piJom/hF0.')
 if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
     uci add rpcd login
     uci set rpcd.@login[-1].username='root'
+    uci set rpcd.@login[-1].password="$EMPTY_HASH"
     uci add_list rpcd.@login[-1].read='*'
     uci add_list rpcd.@login[-1].write='*'
+else
+    uci set rpcd.@login[0].password="$EMPTY_HASH"
 fi
-uci set rpcd.@login[0].password=''
 uci commit rpcd 2>/dev/null
 
 uci commit firewall 2>/dev/null

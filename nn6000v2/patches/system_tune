@@ -27,21 +27,28 @@ apply() {
     local rpcd_changed=0 fstab_changed=0 sec target opts m
 
     # 1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
-    #    ImmortalWrt 默认有 config login 但没有 option password 字段，
-    #    elif 只在 password 有值时清空 → 字段不存在时两分支都不执行 → LuCI 403。
-    #    修复：login 不存在则创建；login 存在则一律 set password=''（自动创建字段）。
+    #    关键: rpcd 用 crypt() 校验密码，option password 必须是 crypt hash 格式。
+    #    - uci set password='' 不持久化（uci 把空字符串当删除）
+    #    - 必须写入 crypt("", salt) 的 hash 值才能匹配空密码登录
+    local EMPTY_HASH
+    EMPTY_HASH=$(openssl passwd -1 -salt luci '' 2>/dev/null || echo '$1$luci$kwi0krvQO9W2piJom/hF0.')
     if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
         uci add rpcd login
         uci set rpcd.@login[-1].username='root'
+        uci set rpcd.@login[-1].password="$EMPTY_HASH"
         uci add_list rpcd.@login[-1].read='*'
         uci add_list rpcd.@login[-1].write='*'
         rpcd_changed=1
         echo "rpcd.@login created"
     fi
-    # 无论 login 是新创建还是已存在，一律确保 password 字段存在且为空
-    # uci set 对不存在的字段会自动创建，对已存在的字段会覆盖
-    uci set rpcd.@login[0].password=''
-    rpcd_changed=1
+    # 检查 password 是否为有效的 crypt hash（非空即有效）
+    local current_pass
+    current_pass=$(uci -q get rpcd.@login[0].password 2>/dev/null)
+    if [ -z "$current_pass" ] || echo "$current_pass" | grep -qv '^\$[0-9]'; then
+        uci set rpcd.@login[0].password="$EMPTY_HASH"
+        rpcd_changed=1
+        echo "rpcd.@login password set to empty-hash"
+    fi
 
     # 2) ext4 挂载加 errors=remount-ro
     for sec in $(uci show fstab 2>/dev/null | sed -n 's/^fstab\.\(.*\)=mount$/\1/p'); do
