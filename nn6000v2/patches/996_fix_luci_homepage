@@ -1,0 +1,36 @@
+#!/bin/sh
+######################################################################
+# vim: set ft=sh
+# 996_fix_luci_homepage - 修复 LuCI 首页(QuickStart)和 wwan.js 404
+#
+# 问题:
+#   1) /luci-static/resources/protocol/wwan.js 404 → JS 报错导致页面渲染异常
+#      原因: luci-proto-wwan 未完整安装但 dispatcher 引用了 wwan 协议
+#   2) /admin/quickstart 重定向到 /admin/status
+#      原因: luci-indexcache 缓存了旧路由表(quickstart 进程未启动时的 fallback)
+#
+# 修复:
+#   1) 写入 wwan.js stub (参考 none.js 格式)
+#   2) 清除 luci-indexcache + 重启 uwsgi 让 dispatcher 重建路由
+#
+# 来源: 本仓库构建，针对 VIKINGYFY/immortalwrt LuCI master
+######################################################################
+
+START=96
+
+# 1) 创建 wwan.js stub，消除404 JS报错
+WWAN_JS="/www/luci-static/resources/protocol/wwan.js"
+if [ ! -f "$WWAN_JS" ]; then
+    mkdir -p "$(dirname "$WWAN_JS")"
+    printf "'use strict';'require network';return network.registerProtocol('wwan',{getI18n:function(){return _('WWAN');}});" > "$WWAN_JS"
+fi
+
+# 2) 清除 LuCI dispatcher 路由缓存，强制重建
+rm -f /tmp/luci-indexcache*
+
+# 3) 重启 uwsgi 让路由表重新生成
+if [ -f /etc/init.d/uwsgi ]; then
+    /etc/init.d/uwsgi restart >/dev/null 2>&1
+fi
+
+exit 0
