@@ -1,23 +1,18 @@
 #!/bin/sh /etc/rc.common
 ######################################################################
 # vim: set ft=sh
-# fix_luci_rpcd - 部署 uhttpd 适配器 + 初始化 rpcd 空密码哈希
+# fix_luci_rpcd - 初始化 rpcd 空密码哈希
 #
 # 背景:
-#   1) LuCI 的 set_new_pwd() / check_oldpwd() 依赖 /usr/sbin/uhttpd -m 
-#      生成 MD5-crypt hash，但固件用 nginx 而非 uhttpd → 必须提供适配器。
-#   2) 适配器必须用 openssl 的 -- 终止选项解析，否则 - 开头的复杂密码
-#      （如 ISP PPPoE 密码 -D7cQ'NrSjr*）被 openssl 当命令行选项。
-#   3) rpcd 密码必须是 crypt hash 格式（uci 不持久化空字符串），
-#      首次开机/iStore 备份还原后需设置初始空密码哈希。
+#   rpcd 密码必须是 crypt hash 格式（uci 不持久化空字符串），
+#   首次开机/iStore 备份还原后需设置初始空密码哈希，
+#   否则 LuCI 空密码登录返回 403。
+#
+# uhttpd 已作为原生包安装（CONFIG_PACKAGE_uhttpd=y），
+# 不再需要适配器脚本。
 #
 # 时序:
 #   START=11，在 fix_luci_ucode (START=10) 之后。
-#   fix_luci_ucode 从 /rom 覆盖 luci ucode 文件后，本脚本确保
-#   uhttpd 适配器和 rpcd 初始配置就位。
-#
-# 依赖:
-#   openssl（固件自带，用于密码哈希生成）
 ######################################################################
 
 START=11
@@ -28,29 +23,8 @@ PROG=fix_luci_rpcd
 EMPTY_HASH='$1$luci$kwi0krvQO9W2piJom/hF0.'
 
 boot() {
-    # 1) 部署 uhttpd 适配器（覆盖 fix_luci_ucode 可能残留的旧版本）
-    UHTTPD="/usr/sbin/uhttpd"
-    if [ ! -x "$UHTTPD" ] || ! grep -q 'openssl.*--' "$UHTTPD" 2>/dev/null; then
-        cat > "$UHTTPD" << 'UHTTPD_EOF'
-#!/bin/sh
-# uhttpd 适配器 - 仅处理 -m 参数（密码哈希生成）
-# 固件用 nginx 而非 uhttpd，但 LuCI rpcd ucode 的 set_new_pwd()
-# 调用 /usr/sbin/uhttpd -m <password> 生成 crypt hash
-# 本脚本拦截该调用，用 openssl 生成等效的 MD5-crypt hash
-# 必须用 -- 终止 openssl 选项解析，否则 - 开头的密码被当选项
-if [ "$1" = "-m" ] && [ -n "$2" ]; then
-    openssl passwd -1 -salt luci -- "$2" 2>/dev/null
-    exit $?
-fi
-echo "uhttpd adapter: only -m (password hash) is supported" >&2
-exit 1
-UHTTPD_EOF
-        chmod +x "$UHTTPD"
-        logger -t "$PROG" "deployed uhttpd adapter with -- fix"
-    fi
-
-    # 2) rpcd 初始化：仅当 login section 存在但无 password 字段时设置空密码哈希
-    #    不覆盖用户已在 LuCI 设置的密码
+    # 仅当 login section 存在但无 password 字段时设置空密码哈希
+    # 不覆盖用户已在 LuCI 设置的密码
     if uci -q get rpcd.@login[0] >/dev/null 2>&1; then
         local current_pwd
         current_pwd=$(uci -q get rpcd.@login[0].password)
@@ -60,7 +34,4 @@ UHTTPD_EOF
             logger -t "$PROG" "initialized rpcd empty password hash"
         fi
     fi
-
-    # 3) 重启 rpcd 使其读取最新配置
-    /etc/init.d/rpcd restart >/dev/null 2>&1
 }
