@@ -4,11 +4,14 @@
 # system_tune - 系统级收尾清理/调优（每次开机检查，幂等）
 #
 # 处理项:
-#   1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
-#   2) ext4 挂载加 errors=remount-ro
+#   1) ext4 挂载加 errors=remount-ro
 #      /overlay 与 /mnt/sda2 默认 errors=continue（I/O 出错继续写），
 #      改为 remount-ro：ext4 检测到错误时转只读，保护数据完整性。
 #      同时校验 /proc/mounts，如尚未生效则立即 remount。
+#
+# 已移除:
+#   - rpcd 密码管理（已回滚）：用户通过 LuCI 自主管理密码，
+#     system_tune 不再强制覆盖，避免每次开机覆盖用户在 LuCI 设置的密码。
 #
 # 明确不处理（已核实）:
 #   - /etc/modules.conf 的 `options ecm front_end_selection=`：
@@ -24,33 +27,9 @@ START=19
 PROG=system_tune
 
 apply() {
-    local rpcd_changed=0 fstab_changed=0 sec target opts m
+    local fstab_changed=0 sec target opts m
 
-    # 1) 确保 rpcd.@login 存在且密码为空（用户可直接登录）
-    #    关键: rpcd 用 crypt() 校验密码，option password 必须是 crypt hash 格式。
-    #    - uci set password='' 不持久化（uci 把空字符串当删除）
-    #    - 必须写入 crypt("", salt) 的 hash 值才能匹配空密码登录
-    local EMPTY_HASH
-    EMPTY_HASH=$(openssl passwd -1 -salt luci '' 2>/dev/null || echo '$1$luci$kwi0krvQO9W2piJom/hF0.')
-    if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
-        uci add rpcd login
-        uci set rpcd.@login[-1].username='root'
-        uci set rpcd.@login[-1].password="$EMPTY_HASH"
-        uci add_list rpcd.@login[-1].read='*'
-        uci add_list rpcd.@login[-1].write='*'
-        rpcd_changed=1
-        echo "rpcd.@login created"
-    fi
-    # 检查 password 是否为有效的 crypt hash（非空即有效）
-    local current_pass
-    current_pass=$(uci -q get rpcd.@login[0].password 2>/dev/null)
-    if [ -z "$current_pass" ] || echo "$current_pass" | grep -qv '^\$[0-9]'; then
-        uci set rpcd.@login[0].password="$EMPTY_HASH"
-        rpcd_changed=1
-        echo "rpcd.@login password set to empty-hash"
-    fi
-
-    # 2) ext4 挂载加 errors=remount-ro
+    # 1) ext4 挂载加 errors=remount-ro
     for sec in $(uci show fstab 2>/dev/null | sed -n 's/^fstab\.\(.*\)=mount$/\1/p'); do
         target=$(uci -q get "fstab.$sec.target")
         case "$target" in
@@ -66,14 +45,6 @@ apply() {
             ;;
         esac
     done
-
-    # 提交 rpcd 变更（独立于 fstab，确保 rpcd 密码修改不会因 fstab 无变化而丢失）
-    if [ "$rpcd_changed" = "1" ]; then
-        uci commit rpcd 2>/dev/null
-        # rpcd 可能已用旧配置启动，需重启以加载新密码策略
-        /etc/init.d/rpcd restart 2>/dev/null
-        logger -t "$PROG" "rpcd.@login password cleared and rpcd restarted"
-    fi
 
     # 提交 fstab 变更
     if [ "$fstab_changed" = "1" ]; then

@@ -9,7 +9,10 @@
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan（避免绑定 WAN 地址提供 DNS）
 #   5) dropbear 仅绑定 lan 网络（Interface=lan 逻辑网络名，非 br-lan）
-#   6) rpcd.@login 确保存在且密码为空（空密码=用户可直接登录 LuCI）
+#
+# 已移除:
+#   - rpcd 密码管理（已回滚）：用户通过 LuCI 自主管理密码，
+#     本脚本不再强制覆盖，避免首次启动覆盖 LuCI 设置。
 #
 # 注意: UPnP 不在本脚本处理范围内（用户要求长期启用，不自动禁用）。
 #
@@ -45,26 +48,6 @@ fi
 if uci -q get dropbear.main >/dev/null 2>&1; then
     uci set dropbear.main.Interface='lan'
 fi
-
-# 6) rpcd.@login 确保存在且密码为空（空密码=用户直接登录，无需密码）
-#    ⚠️ 不生成随机密码 — 随机密码会导致用户无法从 Web 登录
-#    由 system_tune (START=19) 在每次开机时持续保障
-#
-#    关键: rpcd 用 crypt() 校验密码，option password 必须是 crypt hash 格式。
-#    - uci set password='' 不持久化（uci 把空字符串当删除）
-#    - 明文如 'test' 会被 crypt('test','test') 校验失败
-#    - 必须写入 crypt("", salt) 的 hash 值才能匹配空密码登录
-EMPTY_HASH=$(openssl passwd -1 -salt luci '' 2>/dev/null || echo '$1$luci$kwi0krvQO9W2piJom/hF0.')
-if ! uci -q get rpcd.@login[0] >/dev/null 2>&1; then
-    uci add rpcd login
-    uci set rpcd.@login[-1].username='root'
-    uci set rpcd.@login[-1].password="$EMPTY_HASH"
-    uci add_list rpcd.@login[-1].read='*'
-    uci add_list rpcd.@login[-1].write='*'
-else
-    uci set rpcd.@login[0].password="$EMPTY_HASH"
-fi
-uci commit rpcd 2>/dev/null
 
 uci commit firewall 2>/dev/null
 uci commit dhcp 2>/dev/null

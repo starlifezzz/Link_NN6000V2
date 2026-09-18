@@ -11,7 +11,7 @@
 #   5) dropbear 仅绑定 lan (Interface=lan)
 #
 # 注意: UPnP 不在处理范围内（用户要求长期启用）。
-# rpcd.@login 由 system_tune (START=19) 统一管理，本脚本不操作 rpcd。
+# rpcd 密码由用户通过 LuCI 自主管理，本脚本不操作 rpcd。
 ######################################################################
 
 START=18
