@@ -74,6 +74,19 @@ install_luci_ucode_fix() {
     fi
 }
 
+# 部署 uhttpd 适配器（nginx→uhttpd 密码哈希桥接）+ rpcd 空密码哈希初始化。
+# START=11，在 fix_luci_ucode (START=10) 之后运行。
+# 解决: set_new_pwd/check_oldpwd 依赖 uhttpd -m 生成 crypt hash，
+#       但固件用 nginx 导致密码修改失败（复杂密码返回空哈希）。
+install_luci_rpcd_fix() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ -d "$target_dir" ]; then
+        install -Dm755 "$BASE_PATH/patches/fix_luci_rpcd" "$target_dir/base-files/etc/init.d/fix_luci_rpcd"
+        echo "已安装 fix_luci_rpcd 启动修复脚本 (uhttpd 适配器 + rpcd 密码初始化)"
+    fi
+}
+
 # 修复 istorex 首页温度拿不到 / 系统信息 404：
 #  1) luci-app-istorex 0.6.6 前端调用 /cgi-bin/luci/linkease/api/，
 #     而 luci-app-quickstart 0.12.8 只注册 /cgi-bin/luci/istore/ 路由 → 404；
