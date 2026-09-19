@@ -87,6 +87,18 @@ install_luci_rpcd_fix() {
     fi
 }
 
+# 每次启动清 LuCI 路由缓存 + 重启 uwsgi，修复 QuickStart/iStore 首页 404。
+# START=93（quickstart S92 之后），解决 uwsgi(S79) 构建缓存时
+# quickstart 未启动导致路由注册为 redirect_fallback 的竞态问题。
+install_luci_homepage_fix() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ -d "$target_dir" ]; then
+        install -Dm755 "$BASE_PATH/patches/fix_luci_homepage" "$target_dir/base-files/etc/init.d/fix_luci_homepage"
+        echo "已安装 fix_luci_homepage 启动修复脚本 (清缓存+重启uwsgi，START=93)"
+    fi
+}
+
 # 修复 istorex 首页温度拿不到 / 系统信息 404：
 #  1) luci-app-istorex 0.6.6 前端调用 /cgi-bin/luci/linkease/api/，
 #     而 luci-app-quickstart 0.12.8 只注册 /cgi-bin/luci/istore/ 路由 → 404；
