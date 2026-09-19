@@ -193,11 +193,14 @@ install_tuning_scripts() {
 # uwsgi 启动优先级改为 93（quickstart S92 之后）
 # 解决: uwsgi(S79) 构建 LuCI 路由缓存时 quickstart(S92) 尚未启动，
 #       缓存中注册 redirect_fallback(→ /admin/status) 的竞态问题。
+# 注意: START= 在 files/uwsgi.init 中，不在 Makefile 中。
 fix_uwsgi_start_priority() {
-    local makefile="$BUILD_DIR/feeds/packages/net/uwsgi/Makefile"
-    if [ -f "$makefile" ] && grep -q '^START=79' "$makefile"; then
-        sed -i 's/^START=79/START=93/' "$makefile"
-        echo "已修改 uwsgi START=79→93（quickstart 之后）"
+    local init_file="$BUILD_DIR/feeds/packages/net/uwsgi/files/uwsgi.init"
+    if [ -f "$init_file" ] && grep -q '^START=79' "$init_file"; then
+        sed -i 's/^START=79/START=93/' "$init_file"
+        echo "已修改 uwsgi files/uwsgi.init START=79→93（quickstart 之后）"
+    else
+        echo "警告: 未找到 uwsgi/files/uwsgi.init 或 START≠79，跳过"
     fi
 }
 
@@ -450,17 +453,21 @@ fix_pbr_ip_forward() {
 }
 
 set_nginx_default_config() {
-    local nginx_config_path="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx.config"
-    if [ -f "$nginx_config_path" ] && [ -f "$BASE_PATH/patches/nginx.config" ]; then
-        \cp -f "$BASE_PATH/patches/nginx.config" "$nginx_config_path"
-        echo "已覆盖 nginx.config（构建时文件替换）"
+    # nginx-ssl-util 安装的 UCI config 源文件是 files/nginx（→ /etc/config/nginx）
+    # 不是 files/nginx.config，也不是 /etc/nginx/conf.d/
+    local nginx_uci="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx"
+    if [ -f "$nginx_uci" ] && [ -f "$BASE_PATH/patches/nginx.config" ]; then
+        \cp -f "$BASE_PATH/patches/nginx.config" "$nginx_uci"
+        echo "已覆盖 nginx UCI config（files/nginx → /etc/config/nginx）"
     fi
 
-    # 静默处理 quickstart 缺失图标请求（返回 204，避免 nginx error log 刷屏）
-    local nginx_quickstart_loc="$BUILD_DIR/feeds/packages/net/nginx-util/files/quickstart_icons.location"
-    if [ -d "$(dirname "$nginx_quickstart_loc")" ] && [ -f "$BASE_PATH/patches/quickstart_icons.location" ]; then
-        \cp -f "$BASE_PATH/patches/quickstart_icons.location" "$nginx_quickstart_loc"
-        echo "已覆盖 quickstart_icons.location（构建时文件替换）"
+    # quickstart_icons.location：安装到 base-files 的 /etc/nginx/conf.d/
+    # nginx uci.conf 中 include conf.d/*.locations 会自动加载
+    local conf_d="$BUILD_DIR/package/base-files/files/etc/nginx/conf.d"
+    if [ -f "$BASE_PATH/patches/quickstart_icons.location" ]; then
+        mkdir -p "$conf_d"
+        \cp -f "$BASE_PATH/patches/quickstart_icons.location" "$conf_d/quickstart_icons.location"
+        echo "已安装 quickstart_icons.location 到 /etc/nginx/conf.d/"
     fi
 
     local nginx_template="$BUILD_DIR/feeds/packages/net/nginx-util/files/uci.conf.template"
