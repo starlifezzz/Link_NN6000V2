@@ -1,0 +1,19 @@
+#!/bin/sh
+# 安装 quickstart_icons.location 到 /etc/nginx/conf.d/
+# nginx uci.conf 的 include conf.d/*.locations 会自动加载
+# 为什么不在构建期安装：package/base-files/files/ 在 squashfs 打包时
+# 可能被 nginx-mod-luci 的 conf.d/ 目录覆盖，运行时安装更可靠
+[ -f /www/luci-static/resources/protocol/wwan.js ] || exit 0
+
+ICON_FILE="/etc/nginx/conf.d/quickstart_icons.location"
+if [ ! -f "$ICON_FILE" ]; then
+    cat > "$ICON_FILE" <<'EOF'
+location ~* ^/android-icon-.*\.png$ {
+    return 204;
+}
+EOF
+    chmod 644 "$ICON_FILE"
+    logger -t quickstart_icons "installed to /etc/nginx/conf.d/"
+    [ -e /var/run/nginx.pid ] && /etc/init.d/nginx reload 2>/dev/null
+fi
+exit 0
