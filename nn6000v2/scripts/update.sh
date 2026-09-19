@@ -50,6 +50,7 @@ main() {
     change_dnsmasq2full
     fix_default_set
     fix_mk_def_depends
+    fix_uwsgi_start_priority
     update_default_lan_addr
     update_affinity_script
     install_luci_ucode_fix

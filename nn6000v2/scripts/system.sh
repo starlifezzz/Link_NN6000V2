@@ -14,14 +14,21 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
     install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
+    # 996_fix_luci_homepage 已废弃：uwsgi START 改为 93（quickstart S92 之后），
+    # 路由缓存竞态从源头解决，不再需要每次启动清缓存+重启 uwsgi。
     install -Dm544 "$BASE_PATH/patches/996_fix_luci_homepage" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_fix_luci_homepage"
+    # 998/999: 保留（NSS 频率设置 + 防火墙加固）
     install -Dm544 "$BASE_PATH/patches/998_set_nss_freq" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/998_set_nss_freq"
-    install -Dm544 "$BASE_PATH/patches/999_harden_firewall" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/999_harden_firewall"
+    # 999_harden_firewall 已移除：与 fix_firewall_harden (init.d, START=18) 完全重复，
+    # fix_firewall_harden 每次开机检查并恢复加固状态，已覆盖对抗备份还原场景。
     # LuCI 登录故障诊断脚本（刷机后 SSH 执行: luci_diag）
     install -Dm755 "$BASE_PATH/patches/luci_diag" "$BUILD_DIR/package/base-files/files/usr/bin/luci_diag"
     # sysctl 网络调优：构建期打入 rootfs (/etc/sysctl.d/)，每次开机由 init.d/sysctl 应用，
     # 随固件 sysupgrade 自动保留（不再依赖 uci-defaults 一次性写入 /etc/sysctl.conf）
-    install -Dm644 "$BASE_PATH/patches/sysctl_custom.conf" "$BUILD_DIR/package/base-files/files/etc/sysctl.d/99-custom.conf"
+    # 用 zz-custom.conf 而非 99-custom.conf：字典序排在 qca-nss-ecm.conf (q) 之后，
+    # 在 START=11 阶段 sysctl 加载时自动覆盖 qca-nss-ecm.conf 的 nf_conntrack_max=65535，
+    # 无需运行时 init.d 重新应用。移除 sysctl_custom init.d 脚本。
+    install -Dm644 "$BASE_PATH/patches/sysctl_custom.conf" "$BUILD_DIR/package/base-files/files/etc/sysctl.d/zz-custom.conf"
     
     if [ -f "$BUILD_DIR/package/emortal/autocore/files/tempinfo" ]; then
         if [ -f "$BASE_PATH/patches/tempinfo" ]; then
@@ -164,8 +171,8 @@ EOF
 #  - nss_tune (START=27): 纯有线场景的 NSS n2h/pbuf 调优（官方
 #    qca-nss-pbuf.init 受 CONFIG_ATH11K_NSS_SUPPORT + ath11k 运行时检查限制，
 #    nowifi 设备不生效）
-#  - sysctl_custom (START=30): 在 qca-nss-ecm (S26) 之后重新应用
-#    99-custom.conf，避免 conntrack_max 等被 qca-nss-ecm.conf / sysctl.conf 覆盖
+#  - sysctl_custom 已移除：zz-custom.conf 字典序在 qca-nss-ecm.conf 之后，
+#    START=11 阶段自动覆盖，无需运行时重新应用
 install_tuning_scripts() {
     local target_dir="$BUILD_DIR/target/linux/qualcommax"
 
@@ -176,13 +183,22 @@ install_tuning_scripts() {
 
     install -Dm755 "$BASE_PATH/patches/nss_tune" \
         "$target_dir/base-files/etc/init.d/nss_tune"
-    install -Dm755 "$BASE_PATH/patches/sysctl_custom" \
-        "$target_dir/base-files/etc/init.d/sysctl_custom"
     install -Dm755 "$BASE_PATH/patches/fix_firewall_harden" \
         "$target_dir/base-files/etc/init.d/fix_firewall_harden"
     install -Dm755 "$BASE_PATH/patches/system_tune" \
         "$target_dir/base-files/etc/init.d/system_tune"
-    echo "已安装 nss_tune / sysctl_custom / fix_firewall_harden / system_tune 脚本"
+    echo "已安装 nss_tune / fix_firewall_harden / system_tune 脚本（sysctl_custom 已移除）"
+}
+
+# uwsgi 启动优先级改为 93（quickstart S92 之后）
+# 解决: uwsgi(S79) 构建 LuCI 路由缓存时 quickstart(S92) 尚未启动，
+#       缓存中注册 redirect_fallback(→ /admin/status) 的竞态问题。
+fix_uwsgi_start_priority() {
+    local makefile="$BUILD_DIR/feeds/packages/net/uwsgi/Makefile"
+    if [ -f "$makefile" ] && grep -q '^START=79' "$makefile"; then
+        sed -i 's/^START=79/START=93/' "$makefile"
+        echo "已修改 uwsgi START=79→93（quickstart 之后）"
+    fi
 }
 
 fix_hash_value() {
@@ -215,31 +231,16 @@ change_cpuusage() {
     fi
 }
 
+# 构建时直接写入 cron 任务到 base-files，不再依赖运行时 init.d 脚本
 set_custom_task() {
-    local sh_dir="$BUILD_DIR/package/base-files/files/etc/init.d"
-    cat <<'EOF' >"$sh_dir/custom_task"
-#!/bin/sh /etc/rc.common
-START=99
-
-boot() {
-    sed -i '/drop_caches/d' /etc/crontabs/root
-    echo "15 3 * * * sync && echo 3 > /proc/sys/vm/drop_caches" >>/etc/crontabs/root
-
-    sed -i '/wireguard_watchdog/d' /etc/crontabs/root
-
-    local wg_ifname=$(wg show | awk '/interface/ {print $2}')
-
-    if [ -n "$wg_ifname" ]; then
-        echo "*/15 * * * * /usr/bin/wireguard_watchdog" >>/etc/crontabs/root
-        uci set system.@system[0].cronloglevel='9'
-        uci commit system
-        /etc/init.d/cron restart
-    fi
-
-    crontab /etc/crontabs/root
-}
+    local cron_dir="$BUILD_DIR/package/base-files/files/etc/crontabs"
+    mkdir -p "$cron_dir"
+    cat >"$cron_dir/root" <<'EOF'
+15 3 * * * sync && echo 3 > /proc/sys/vm/drop_caches
+3 3 12 12 * /usr/bin/nginx-util 'check_ssl'
 EOF
-    chmod +x "$sh_dir/custom_task"
+    chmod 600 "$cron_dir/root"
+    echo "已写入 cron 任务到 base-files（构建时）"
 }
 
 update_nss_diag() {
@@ -450,42 +451,16 @@ fix_pbr_ip_forward() {
 
 set_nginx_default_config() {
     local nginx_config_path="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx.config"
-    if [ -f "$nginx_config_path" ]; then
-        cat >"$nginx_config_path" <<EOF
-config main 'global'
-        option uci_enable 'true'
-
-config server '_lan'
-        list listen '443 ssl default_server'
-        list listen '[::]:443 ssl default_server'
-        option server_name '_lan'
-        list include 'restrict_locally'
-        list include 'conf.d/*.locations'
-        option uci_manage_ssl 'self-signed'
-        option ssl_certificate '/etc/nginx/conf.d/_lan.crt'
-        option ssl_certificate_key '/etc/nginx/conf.d/_lan.key'
-        option ssl_session_cache 'shared:SSL:32k'
-        option ssl_session_timeout '64m'
-        option access_log 'off; # logd openwrt'
-
-config server 'http_only'
-        list listen '80'
-        list listen '[::]:80'
-        option server_name 'http_only'
-        list include 'conf.d/*.locations'
-        option access_log 'off; # logd openwrt'
-EOF
+    if [ -f "$nginx_config_path" ] && [ -f "$BASE_PATH/patches/nginx.config" ]; then
+        \cp -f "$BASE_PATH/patches/nginx.config" "$nginx_config_path"
+        echo "已覆盖 nginx.config（构建时文件替换）"
     fi
 
     # 静默处理 quickstart 缺失图标请求（返回 204，避免 nginx error log 刷屏）
     local nginx_quickstart_loc="$BUILD_DIR/feeds/packages/net/nginx-util/files/quickstart_icons.location"
-    if [ -d "$(dirname "$nginx_quickstart_loc")" ]; then
-        cat >"$nginx_quickstart_loc" <<'NGX'
-location ~* ^/android-icon-.*\.png$ {
-    return 204;
-}
-NGX
-        echo "已添加 quickstart 图标静默处理规则"
+    if [ -d "$(dirname "$nginx_quickstart_loc")" ] && [ -f "$BASE_PATH/patches/quickstart_icons.location" ]; then
+        \cp -f "$BASE_PATH/patches/quickstart_icons.location" "$nginx_quickstart_loc"
+        echo "已覆盖 quickstart_icons.location（构建时文件替换）"
     fi
 
     local nginx_template="$BUILD_DIR/feeds/packages/net/nginx-util/files/uci.conf.template"

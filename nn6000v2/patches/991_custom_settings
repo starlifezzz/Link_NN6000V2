@@ -6,8 +6,8 @@
 #
 # 说明：
 #   - 网络调优 (conntrack/TCP/BBR/安全项) 已迁移至构建期文件
-#     /etc/sysctl.d/99-custom.conf (见 nn6000v2/patches/sysctl_custom.conf)
-#     由 /etc/init.d/sysctl (START=11) 每次开机应用，且随 rootfs 在 sysupgrade 后保留。
+#     /etc/sysctl.d/zz-custom.conf (见 nn6000v2/patches/sysctl_custom.conf)
+#     字典序在 qca-nss-ecm.conf 之后，START=11 自动覆盖，随 rootfs 在 sysupgrade 后保留。
 #   - 本脚本仅保留 dropbear 访问限制解除（若上游默认配置出现 DirectInterface 限制时自动解除）
 #===============================================================================
 
