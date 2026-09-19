@@ -1,14 +1,44 @@
 #!/bin/sh
 ######################################################################
 # vim: set ft=sh
-# DEPRECATED: 此 uci-defaults 已废弃，逻辑移至 fix_luci_homepage init.d 脚本。
+# 996_fix_luci_homepage - 修复 LuCI 首页(QuickStart)、wwan.js 404、uhttpd 端口冲突
 #
-# 原因: uwsgi (S79) 构建路由缓存时 quickstart (S92) 尚未启动，
-#       仅在首次启动清缓存不够，每次启动都需要清。
-#       uci-defaults 只执行一次就删除，无法覆盖后续启动。
-#       现由 fix_luci_homepage (init.d, START=93) 在每次启动时处理。
+# 问题:
+#   1) /luci-static/resources/protocol/wwan.js 404 → JS 报错导致页面渲染异常
+#      原因: luci-proto-wwan 未完整安装但 dispatcher 引用了 wwan 协议
+#   2) /admin/quickstart 重定向到 /admin/status
+#      原因: luci-indexcache 缓存了旧路由表(quickstart 进程未启动时的 fallback)
 #
-# 保留此文件仅为兼容旧 overlay（防止旧备份还原后残留的 996 覆盖
-# 新固件中的 fix_luci_homepage init.d 脚本）。
+# 修复:
+#   1) 写入 wwan.js stub (参考 none.js 格式)
+#   2) 清除 luci-indexcache + 重启 uwsgi 让 dispatcher 重建路由
+#
+# 来源: 本仓库构建，针对 VIKINGYFY/immortalwrt LuCI master
 ######################################################################
+
+START=96
+
+# 1) 创建 wwan.js stub，消除404 JS报错
+WWAN_JS="/www/luci-static/resources/protocol/wwan.js"
+if [ ! -f "$WWAN_JS" ]; then
+    mkdir -p "$(dirname "$WWAN_JS")"
+    printf "'use strict';'require network';return network.registerProtocol('wwan',{getI18n:function(){return _('WWAN');}});" > "$WWAN_JS"
+fi
+
+# 2) 清除 LuCI dispatcher 路由缓存，强制重建
+rm -f /tmp/luci-indexcache*
+
+# 3) 重启 uwsgi 让路由表重新生成
+if [ -f /etc/init.d/uwsgi ]; then
+    /etc/init.d/uwsgi restart >/dev/null 2>&1
+fi
+
+# 4) 禁用 uhttpd 自启动
+#    uhttpd 作为原生包安装(CONFIG_PACKAGE_uhttpd=y)用于 LuCI 密码哈希(uhttpd -m)，
+#    但其 init 脚本(S50)先于 nginx(S80)执行，会抢占 80 端口导致 nginx 启动失败。
+#    禁用 uhttpd 自启动，只保留二进制供密码哈希调用。
+if [ -f /etc/init.d/uhttpd ]; then
+    /etc/init.d/uhttpd disable
+fi
+
 exit 0
