@@ -8,7 +8,8 @@
 #   - 网络调优 (conntrack/TCP/BBR/安全项) 已迁移至构建期文件
 #     /etc/sysctl.d/zz-custom.conf (见 nn6000v2/patches/sysctl_custom.conf)
 #     字典序在 qca-nss-ecm.conf 之后，START=11 自动覆盖，随 rootfs 在 sysupgrade 后保留。
-#   - 本脚本仅保留 dropbear 访问限制解除（若上游默认配置出现 DirectInterface 限制时自动解除）
+#   - 本脚本保留 dropbear 访问限制解除（若上游默认配置出现 DirectInterface 限制时自动解除）
+#     与 LAN IPv6 有状态 DHCPv6 配置（同步上游 6fe3759；每开机保持见 patches/system_tune）
 #===============================================================================
 
 #-------------------------------------------------------------------------------
@@ -70,6 +71,30 @@ configure_dropbear() {
 }
 
 #-------------------------------------------------------------------------------
+# 配置 IPv6 DHCPv6 有状态分配（同步上游 6fe3759）
+#-------------------------------------------------------------------------------
+configure_ipv6_dhcpv6() {
+    log_info "正在配置 LAN IPv6 有状态 DHCPv6..."
+
+    uci -q batch << 'EOF'
+set dhcp.lan.dhcpv6='server'
+set dhcp.lan.ra='server'
+delete dhcp.lan.ra_flags
+add_list dhcp.lan.ra_flags='managed-config'
+add_list dhcp.lan.ra_flags='other-config'
+commit dhcp
+EOF
+
+    if [ $? -eq 0 ]; then
+        log_info "DHCPv6 有状态分配配置完成 (server + managed/other flags)"
+        return 0
+    else
+        log_error "DHCPv6 配置失败"
+        return 1
+    fi
+}
+
+#-------------------------------------------------------------------------------
 # 主函数
 #-------------------------------------------------------------------------------
 main() {
@@ -77,6 +102,9 @@ main() {
 
     # 配置 dropbear
     configure_dropbear
+
+    # IPv6 有状态 DHCPv6
+    configure_ipv6_dhcpv6
 
     log_info "自定义配置应用完成"
 }

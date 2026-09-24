@@ -8,6 +8,7 @@
 #      /overlay 与 /mnt/sda2 默认 errors=continue（I/O 出错继续写），
 #      改为 remount-ro：ext4 检测到错误时转只读，保护数据完整性。
 #      同时校验 /proc/mounts，如尚未生效则立即 remount。
+#   2) 保持 LAN IPv6 有状态 DHCPv6（同步上游 6fe3759，原 custom_task boot 段）
 #
 # 已移除:
 #   - rpcd 密码管理（已回滚）：用户通过 LuCI 自主管理密码，
@@ -58,6 +59,21 @@ apply() {
             mount -o remount,errors=remount-ro "$m" 2>/dev/null && \
                 logger -t "$PROG" "remounted $m with errors=remount-ro"
         done
+    fi
+
+    # 2) 保持 LAN IPv6 有状态 DHCPv6（同步上游 6fe3759，原 custom_task boot 段）
+    #    [如不想持久化删除此段]
+    if [ "$(uci -q get dhcp.lan.ra)" != "server" ] || \
+       [ "$(uci -q get dhcp.lan.dhcpv6)" != "server" ] || \
+       [ "$(uci -q get dhcp.lan.ra_flags)" = "none" ]; then
+        uci set dhcp.lan.dhcpv6='server'
+        uci set dhcp.lan.ra='server'
+        uci -q delete dhcp.lan.ra_flags
+        uci add_list dhcp.lan.ra_flags='managed-config'
+        uci add_list dhcp.lan.ra_flags='other-config'
+        uci commit dhcp
+        /etc/init.d/odhcpd restart
+        logger -t "$PROG" "LAN IPv6 stateful DHCPv6 enforced"
     fi
 
     return 0
