@@ -42,6 +42,7 @@ main() {
     update_golang
     clone_quickfile
     clone_lucky
+    install_extra_feed_deps
     clone_easytier
     clone_luci_tailscale
     install_feeds

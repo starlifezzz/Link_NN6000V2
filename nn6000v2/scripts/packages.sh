@@ -25,7 +25,7 @@ clone_packages() {
     local move_to="${8:-}"
     
     if [ -n "$pre_cmd" ]; then
-        (cd "$BUILD_DIR" && eval "$pre_cmd") || return 1
+        (cd "$BUILD_DIR" && eval "$pre_cmd") || exit 1
     fi
     
     rm -rf "$target_dir" 2>/dev/null || true
@@ -41,14 +41,14 @@ clone_packages() {
         if ! git sparse-checkout set $sparse_pattern; then
             echo "错误：稀疏检出 $sparse_pattern 失败" >&2
             popd >/dev/null
-            return 1
+            exit 1
         fi
         git checkout --quiet
         popd >/dev/null
         
         if [ -n "$move_from" ] && [ -n "$move_to" ]; then
             rm -rf "$move_to" 2>/dev/null || true
-            mv "$move_from" "$move_to" || return 1
+            mv "$move_from" "$move_to" || exit 1
         fi
     else
         if ! git clone --depth=1 "$repo_url" "$target_dir"; then
@@ -58,7 +58,7 @@ clone_packages() {
     fi
     
     if [ -n "$post_cmd" ]; then
-        (cd "$BUILD_DIR" && eval "$post_cmd") || return 1
+        (cd "$BUILD_DIR" && eval "$post_cmd") || exit 1
     fi
     
     echo "✓ $name 克隆完成"
@@ -74,35 +74,22 @@ install_openwrt_packages() {
         luci-app-tailscale-community
 }
 
-
 clone_lucky() {
     local LUCKY_REPO="${GITHUB_BASE}gdy666/luci-app-lucky.git"
     local LUCKY_DIR="$OPENWRT_PACKAGES_DIR/lucky"
     local LUCI_APP_LUCKY_DIR="$OPENWRT_PACKAGES_DIR/luci-app-lucky"
-    local LUCKY_TEMP="$OPENWRT_PACKAGES_DIR/lucky-temp"
-    local LUCKI_APP_TEMP="$OPENWRT_PACKAGES_DIR/luci-app-lucky-temp"
+    local TEMP_DIR="$OPENWRT_PACKAGES_DIR/lucky-temp"
 
-    clone_packages "lucky" \
-        "$LUCKY_REPO" \
-        "$LUCKY_TEMP" \
-        "lucky" \
-        "" \
-        "" \
-        "$LUCKY_TEMP/lucky" \
-        "$LUCKY_DIR"
-
-    rm -rf "$LUCKY_TEMP"
+    rm -rf "$LUCKY_DIR" "$LUCI_APP_LUCKY_DIR" "$TEMP_DIR" 2>/dev/null || true
 
     clone_packages "luci-app-lucky" \
         "$LUCKY_REPO" \
-        "$LUCKI_APP_TEMP" \
-        "luci-app-lucky" \
-        "" \
-        "" \
-        "$LUCKI_APP_TEMP/luci-app-lucky" \
-        "$LUCI_APP_LUCKY_DIR"
+        "$TEMP_DIR" \
+        "lucky luci-app-lucky"
 
-    rm -rf "$LUCKI_APP_TEMP"
+    mv "$TEMP_DIR/lucky" "$LUCKY_DIR"
+    mv "$TEMP_DIR/luci-app-lucky" "$LUCI_APP_LUCKY_DIR"
+    rm -rf "$TEMP_DIR"
     
     local lucky_conf="$LUCKY_DIR/files/luckyuci"
     if [ -f "$lucky_conf" ]; then
@@ -112,11 +99,13 @@ clone_lucky() {
 }
 
 
+install_extra_feed_deps() {
+    (cd "$BUILD_DIR" && ./scripts/feeds install -f luci-lib-jsonc kmod-ipt-conntrack kmod-ipt-nat)
+}
+
 clone_easytier() {
     local EASYTIER_DIR="$OPENWRT_PACKAGES_DIR/luci-app-easytier"
     local TEMP_DIR="$OPENWRT_PACKAGES_DIR/easytier-temp"
-
-    (cd "$BUILD_DIR" && ./scripts/feeds install -f luci-lib-jsonc)
 
     clone_packages "luci-app-easytier" \
         "${GITHUB_BASE}EasyTier/luci-app-easytier.git" \
