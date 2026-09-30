@@ -3,12 +3,13 @@
 # vim: set ft=sh
 # fix_firewall_harden - 启动时检查并按需恢复防火墙安全加固
 #
-# 加固项（与 999_harden_firewall 一致）:
+# 加固项（开机自动检查并恢复；原 999_harden_firewall 已移除，本脚本覆盖其全部场景）:
 #   1) firewall fullcone 关闭
 #   2) docker zone forward 收紧为 REJECT
 #   3) 删除 WAN 侧 linkease(8897) 放行规则
 #   4) dnsmasq 仅监听 lan
 #   5) dropbear 仅绑定 lan (Interface=lan)
+#   6) fw4 软件流表关闭 (flow_offloading/flow_offloading_hw=0, ECM/NSS 硬件卸载替代)
 #
 # 注意: UPnP 不在处理范围内（用户要求长期启用）。
 # rpcd 密码由用户通过 LuCI 自主管理，本脚本不操作 rpcd。
@@ -35,14 +36,14 @@ apply_hardening() {
         logger -t "$PROG" "docker zone forward ACCEPT -> REJECT"
     fi
 
-    # 2) 删除 WAN 侧 linkease(8897) 放行规则
+    # 3) 删除 WAN 侧 linkease(8897) 放行规则
     if uci -q get firewall.linkease >/dev/null 2>&1; then
         uci -q delete firewall.linkease
         changed=1
         logger -t "$PROG" "removed WAN linkease(8897) rule"
     fi
 
-    # 3) dnsmasq 必须限制在 lan
+    # 4) dnsmasq 必须限制在 lan
     if ! uci -q get dhcp.@dnsmasq[0].interface 2>/dev/null | grep -qw lan; then
         uci -q delete dhcp.@dnsmasq[0].interface 2>/dev/null
         uci add_list dhcp.@dnsmasq[0].interface='lan'
@@ -50,12 +51,23 @@ apply_hardening() {
         logger -t "$PROG" "dnsmasq interface restricted to lan"
     fi
 
-    # 4) dropbear 必须绑定 lan (逻辑网络名，非 br-lan)
+    # 5) dropbear 必须绑定 lan (逻辑网络名，非 br-lan)
     if [ -n "$(uci -q get dropbear.main)" ] && \
        [ "$(uci -q get dropbear.main.Interface)" != "lan" ]; then
         uci set dropbear.main.Interface='lan'
         changed=1
         logger -t "$PROG" "dropbear bound to lan via Interface=lan"
+    fi
+
+    # 6) fw4 软件流表关闭：NSS/ECM 已对 NAT/PPPoE 流做硬件加速，软件
+    #    flowtable 属第二层卸载（冗余）；社区有 NSS 构建开软件 offload
+    #    引发 SSL 异常的报告（forum.openwrt.org/t/qualcommax-nss-build/148529/347，
+    #    他机型、未在本机复现验证）。若日后移除 ECM/NSS 栈，删除本块。
+    if [ "$(uci -q get firewall.@defaults[0].flow_offloading)" != "0" ]; then
+        uci set firewall.@defaults[0].flow_offloading='0'
+        uci set firewall.@defaults[0].flow_offloading_hw='0'
+        changed=1
+        logger -t "$PROG" "fw4 software flowtable disabled (ECM/NSS hardware offload only)"
     fi
 
     [ "$changed" = "0" ] && return 0

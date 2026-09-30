@@ -53,6 +53,29 @@ fix_kconfig_recursive_dependency() {
     fi
 }
 
+fix_nss_conn_limit() {
+    # NSS 连接表 IPv4/IPv6 份额再平衡（总量不变 8192，仅倾斜给 IPv4）
+    # 机制: 官方 hook — include/kernel.mk ModuleAutoLoad 读取 MODPARAMS.<module>
+    #       生成 /etc/modules.d/32-qca-nss-drv 的 "module arg=value" 行，
+    #       kmodloader/modprobe 加载时传入 module_param。
+    # 依据: QSDK nss_hlos_if.h: NSS_DEFAULT_NUM_CONN=4096（真机实测 4096/4096）、
+    #       NSS_MAX_TOTAL_NUM_CONN_IPV4_IPV6=8196 → 4096+4096=8192 已是实际天花板，
+    #       故只重新分配不抬总量: 6144+2048=8192（与现网已验证总量完全相同，零越界风险）。
+    # 参数为 S_IRUGO 只读，不能运行时热改，只能加载时传入。
+    # 回滚: 删除本函数新增的 MODPARAMS 行即可恢复默认 4096/4096。
+    local mk="$BUILD_DIR/package/qca-nss/qca-nss-drv/Makefile"
+    if [ ! -f "$mk" ]; then
+        echo "qca-nss-drv Makefile not found, skip nss conn limit fix"
+        return 0
+    fi
+    if grep -q 'MODPARAMS.qca-nss-drv' "$mk"; then
+        echo "qca-nss-drv MODPARAMS already set, skip"
+        return 0
+    fi
+    sed -i '/AUTOLOAD:=$(call AutoLoad,32,qca-nss-drv)/a\  MODPARAMS.qca-nss-drv:=max_ipv4_conn=6144 max_ipv6_conn=2048' "$mk"
+    echo "qca-nss-drv MODPARAMS 已设置: max_ipv4_conn=6144 max_ipv6_conn=2048 (总量 8192 不变)"
+}
+
 update_default_lan_addr() {
     local CFG_PATH="$BUILD_DIR/package/base-files/files/bin/config_generate"
     if [ -f $CFG_PATH ]; then
