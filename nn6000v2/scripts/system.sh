@@ -240,7 +240,6 @@ set_custom_task() {
     local cron_dir="$BUILD_DIR/package/base-files/files/etc/crontabs"
     mkdir -p "$cron_dir"
     cat >"$cron_dir/root" <<'EOF'
-15 3 * * * sync && echo 3 > /proc/sys/vm/drop_caches
 3 3 12 12 * /usr/bin/nginx-util 'check_ssl'
 EOF
     chmod 600 "$cron_dir/root"
