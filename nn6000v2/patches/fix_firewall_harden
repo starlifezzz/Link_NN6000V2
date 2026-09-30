@@ -81,11 +81,11 @@ apply_hardening() {
     # 仅当服务已运行（非开机早期）才动服务；开机早期由各自的 START=19 读取新配置
     [ -e /var/run/fw4.state ] && /etc/init.d/firewall reload 2>/dev/null
 
-    if pgrep -qx dnsmasq; then
+    if pgrep -x dnsmasq >/dev/null; then
         /etc/init.d/dnsmasq restart 2>/dev/null
     fi
 
-    if pgrep -qx dropbear; then
+    if pgrep -x dropbear >/dev/null; then
         (sleep 1; /etc/init.d/dropbear restart >/dev/null 2>&1) &
     fi
 }
