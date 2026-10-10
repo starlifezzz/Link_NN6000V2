@@ -13,7 +13,11 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/990_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
-    install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
+    # 994 = 上游原文（ZJU snapshots 全量写入）；995 = 我方后置覆写层（方案A，
+    # 独有文件名）：UCI 持久化 apk_mirror=ZJU + 备份 + 校验 + 限时 apk update。
+    # 详见 patches/995_apk_repos_tune 头部说明。
+    install -Dm544 "$BASE_PATH/patches/994_set_apk_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_apk_repos"
+    install -Dm544 "$BASE_PATH/patches/995_apk_repos_tune" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/995_apk_repos_tune"
     # 996_fix_luci_homepage 已废弃：uwsgi START 改为 93（quickstart S92 之后），
     # 路由缓存竞态从源头解决，不再需要每次启动清缓存+重启 uwsgi。
     install -Dm544 "$BASE_PATH/patches/996_fix_luci_homepage" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_fix_luci_homepage"

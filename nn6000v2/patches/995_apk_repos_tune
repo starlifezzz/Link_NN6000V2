@@ -1,0 +1,83 @@
+#!/bin/sh
+# ============================================================================
+# 995_apk_repos_tune - APK 软件源后置覆写层（方案A）
+#
+# 分工（上游文件保持原文，我方用独有文件名后置覆改）：
+#   - 上游 994_set_apk_repos（原文不动）：首次启动全量写入 ZJU snapshots
+#     distfeeds（含 kmods 目录推导）
+#   - 本脚本 995（文件名我方独有，上游不会出现 → 永不与上游冲突）：
+#       1) UCI 持久化 system.@imm_init[0].apk_mirror = ZJU snapshots
+#          （sysupgrade 后 distfeeds 重建时与994输出保持一致）
+#       2) 备份当前 distfeeds → distfeeds.list.pre-995.bak
+#       3) 校验日志 + 限时 apk update 自检（不阻塞启动）
+#
+# 变更史（原 nn6000v2/patches/994_set_opkg_repos 迁移至此，内容不丢）：
+#   - 镜像地址：原 USTC 已废弃 —— USTC 未镜像 snapshots（2026-10-10 实测
+#     snapshots 路径全部 404，仅镜像 releases），本固件为 snapshots+apk 体系，
+#     改用实测可用的 ZJU snapshots（与上游 994 同款）。
+#     UCI imm_init.apk_mirror 原为 USTC，同步改为 ZJU，避免重建时写入不可用源。
+#   - 原"禁用 istoreos / openwrt_packages / video"规则随全量重写自然消失
+#     （上游994输出清单不含这三项，行为等价：这些 feed 不出现）。
+#   - 原 sed 分隔符 bug（OLD_MIRRORS 含 `|` 致 s||| 非法）随逻辑迁移一并废弃。
+#   - 新增：移除上游994写入的 kmods 源行 —— 自构建内核 vermagic 必然 404，
+#     且下载挂起会拖死整个 apk update（设备实测）。
+#
+# 执行顺序：uci-defaults 按文件名排序，995 在 994 之后执行（覆改语义）。
+# 本脚本必须以 exit 0 结束（uci-defaults 非零退出会在每次开机重跑）。
+# ============================================================================
+
+MIRROR="https://mirror.zju.edu.cn/immortalwrt/snapshots"
+DISTFEEDS="/etc/apk/repositories.d/distfeeds.list"
+
+log() { logger -t "995_apk_repos_tune" "$1"; echo "[995] $1"; }
+
+# ---- 1. UCI 持久化（与上游994的 ZJU 输出对齐）----
+if uci show system.@imm_init[0] >/dev/null 2>&1; then
+    uci set system.@imm_init[0].apk_mirror="${MIRROR}"
+    uci commit system
+    log "UCI imm_init.apk_mirror = ${MIRROR}"
+else
+    log "⚠️ imm_init 节不存在，跳过 UCI 配置"
+fi
+
+# ---- 2. 备份当前 distfeeds（供回滚）----
+if [ -f "${DISTFEEDS}" ]; then
+    cp "${DISTFEEDS}" "${DISTFEEDS}.pre-995.bak"
+    log "已备份 distfeeds → distfeeds.list.pre-995.bak"
+fi
+
+# ---- 2b. 移除 kmods 源行（方案A覆改：上游994按已装 kernel 包版本推导
+#      kmods 目录，但本固件为 VIKINGYFY 自构建内核，vermagic 不会存在于
+#      任何公共镜像 → 该行必然 404，且下载挂起会拖死整个 apk update
+#      （设备实测 rc=143 超时）。删除此行，kmod 安装本场景不需要。）----
+if grep -q '/kmods/' "${DISTFEEDS}" 2>/dev/null; then
+    sed -i '/\/kmods\//d' "${DISTFEEDS}"
+    log "已移除 kmods 源行（本机构建内核 vermagic 不在公共镜像，必然 404）"
+fi
+
+# ---- 3. 校验日志（最终源清单）----
+log "当前源清单："
+grep -v '^#' "${DISTFEEDS}" 2>/dev/null | grep -v '^$' | while read -r line; do
+    log "  ✓ ${line}"
+done
+
+# ---- 4. 限时 apk update 自检（informational；无论如何 exit 0）----
+#    设备实测：ZJU 全量 update 约 35s（含 IPv6 回退抖动），限时取 180s 留余量。
+log "执行 apk update 自检（180s 限时）..."
+if command -v timeout >/dev/null 2>&1; then
+    apk_out=$(timeout 180 apk update 2>&1)
+else
+    apk_out=$(apk update 2>&1)
+fi
+apk_rc=$?
+echo "${apk_out}" | tail -3 | while read -r line; do
+    [ -n "$line" ] && log "  | ${line}"
+done
+if [ "${apk_rc}" -eq 0 ]; then
+    log "✅ apk update 完成"
+else
+    log "⚠️ apk update rc=${apk_rc}（可能存在不可用源，如本机构建 kmods 不在镜像，属预期）"
+fi
+
+log "APK 源后置覆写完成"
+exit 0

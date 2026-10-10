@@ -1,0 +1,31 @@
+#!/bin/sh
+# 配置 apk 软件源（使用浙江大学镜像 snapshots）
+
+MIRROR="https://mirror.zju.edu.cn/immortalwrt/snapshots"
+ARCH="aarch64_cortex-a53"
+TARGET="qualcommax/ipq60xx"
+
+# 从已安装的 kernel 包版本还原 kmods 目录名:
+# 包版本格式 <内核版本>~<vermagic>-r<发行号>
+# kmods 目录格式 <内核版本>-<发行号>-<vermagic>
+KV=$(awk '/^P:kernel$/{f=1} f&&/^V:/{print substr($0,3); exit}' /lib/apk/db/installed 2>/dev/null)
+if [ -n "$KV" ]; then
+	ver=${KV%%~*}
+	tail=${KV#*~}
+	magic=${tail%-r*}
+	rel=${tail##*-r}
+	kmods_dir="$ver-$rel-$magic"
+fi
+
+# 覆盖自动生成的 distfeeds.list（sysupgrade 后会重建，本脚本随之重跑）
+{
+	echo "$MIRROR/targets/$TARGET/packages/packages.adb"
+	[ -n "$kmods_dir" ] && echo "$MIRROR/targets/$TARGET/kmods/$kmods_dir/packages.adb"
+	echo "$MIRROR/packages/$ARCH/base/packages.adb"
+	echo "$MIRROR/packages/$ARCH/luci/packages.adb"
+	echo "$MIRROR/packages/$ARCH/packages/packages.adb"
+	echo "$MIRROR/packages/$ARCH/routing/packages.adb"
+	echo "$MIRROR/packages/$ARCH/telephony/packages.adb"
+} > /etc/apk/repositories.d/distfeeds.list
+
+echo "✓ APK 软件源已配置 (ZJU snapshots${kmods_dir:+, kmods $kmods_dir})"

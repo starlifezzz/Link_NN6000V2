@@ -10,6 +10,8 @@
 #      转只读，保护数据完整性。
 #      同时校验 /proc/mounts，如尚未生效则立即 remount（每次开机）。
 #   2) 保持 LAN IPv6 有状态 DHCPv6（同步上游 6fe3759，原 custom_task boot 段）
+#   3) 解除 dropbear DirectInterface 访问限制（原 991 逻辑迁入，
+#      每开机幂等检查；方案A：上游 991 保持原文，我方偏好走本覆写层）
 #
 # 已移除:
 #   - rpcd 密码管理（已回滚）：用户通过 LuCI 自主管理密码，
@@ -76,6 +78,16 @@ apply() {
         uci commit dhcp
         /etc/init.d/odhcpd restart
         logger -t "$PROG" "LAN IPv6 stateful DHCPv6 enforced"
+    fi
+
+    # 3) 解除 dropbear DirectInterface 访问限制（原991逻辑迁入，每开机幂等；
+    #    若上游/默认配置无此限制则静默跳过）
+    if uci show dropbear.main >/dev/null 2>&1 && \
+       uci show dropbear.main | grep -q DirectInterface; then
+        uci -q delete dropbear.main.DirectInterface
+        uci commit dropbear
+        /etc/init.d/dropbear restart
+        logger -t "$PROG" "dropbear DirectInterface restriction removed"
     fi
 
     return 0
