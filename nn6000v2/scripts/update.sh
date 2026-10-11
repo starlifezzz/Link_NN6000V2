@@ -25,7 +25,7 @@ GOLANG_BRANCH="27.x"
 THEME_SET="argon"
 LAN_ADDR="10.0.0.1"
 
-SCRIPT_DIR=$(cd $(dirname $0) && pwd)
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BASE_PATH=${BASE_PATH:-$(dirname "$SCRIPT_DIR")}
 
 source "$SCRIPT_DIR/general.sh"
@@ -60,6 +60,8 @@ main() {
     install_istorex_fixes
     fix_nn6000_gpio_conflict
     install_tuning_scripts
+    install_overlay_shadow
+    install_emmc_health
     update_dnsmasq_conf
     change_cpuusage
     set_custom_task

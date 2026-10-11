@@ -3,6 +3,36 @@
 GITHUB_BASE="https://github.com/"
 OPENWRT_PACKAGES_DIR="$BUILD_DIR/feeds/openwrt_packages"
 
+# ---- M12: 第三方包 commit pin（B2 不可复现清单中的可控项）----
+# 固定到具体 commit，构建可复现；上游更新时手动 bump:
+#   git ls-remote https://github.com/<owner>/<repo>.git HEAD
+# 获取失败时自动回退分支最新并打印警告（不会中断构建）。
+# 仍为滚动源（B2 已知接受，不在 pin 范围）:
+#   kenzok8/openwrt_packages(feed)、sbwml golang(27.x 分支)、VIKINGYFY/immortalwrt 本体。
+PIN_LUCKY="20a30abcb05f6c778460faa36a3dd15e95145118"          # gdy666/luci-app-lucky @2026-10-11
+PIN_EASYTIER="79b2b01ded627a634e4bea8d60c7be0f00b708b0"        # EasyTier/luci-app-easytier @2026-10-11
+PIN_QUICKFILE="13f1a61d962e3a7790f7ab9898543be2ee5835cb"       # sbwml/luci-app-quickfile @2026-10-11
+PIN_TAILSCALE="d9a3954213a09e428643db84cce4a2a232727f13"       # Tokisaki-Galaxy/luci-app-tailscale-community @2026-10-11
+
+# 将已克隆仓库切到指定 commit（$1=名称 $2=目录 $3=SHA，空 SHA 直接过）
+apply_pin() {
+    local _name="$1" _dir="$2" _sha="$3"
+    [ -n "$_sha" ] || return 0
+    if git -C "$_dir" cat-file -e "${_sha}^{commit}" 2>/dev/null; then
+        if git -C "$_dir" checkout --quiet "$_sha"; then
+            echo "✓ $_name pinned @ ${_sha:0:12}"
+            return 0
+        fi
+    fi
+    if git -C "$_dir" fetch --quiet --depth 1 origin "$_sha" 2>/dev/null && \
+       git -C "$_dir" checkout --quiet "$_sha" 2>/dev/null; then
+        echo "✓ $_name pinned @ ${_sha:0:12} (fetched)"
+        return 0
+    fi
+    echo "警告: $_name 固定 commit ${_sha:0:12} 获取失败，回退为分支最新（本次该项不可复现，请检查 pin 是否已失效）" >&2
+    return 0
+}
+
 update_golang() {
     if [[ -d ./feeds/packages/lang/golang ]]; then
         \rm -rf ./feeds/packages/lang/golang
@@ -23,6 +53,7 @@ clone_packages() {
     local post_cmd="${6:-}"
     local move_from="${7:-}"
     local move_to="${8:-}"
+    local pin_sha="${9:-}"
     
     if [ -n "$pre_cmd" ]; then
         (cd "$BUILD_DIR" && eval "$pre_cmd") || exit 1
@@ -38,13 +69,20 @@ clone_packages() {
         
         pushd "$target_dir" >/dev/null
         git sparse-checkout init --cone
-        if ! git sparse-checkout set $sparse_pattern; then
+        # L3: 用数组显式分词 —— 旧写法依赖裸 $sparse_pattern 的隐式分词，
+        # 且 target_dir/sparse 路径含空格时会碎裂。
+        local -a sparse_args
+        read -r -a sparse_args <<< "$sparse_pattern"
+        if ! git sparse-checkout set "${sparse_args[@]}"; then
             echo "错误：稀疏检出 $sparse_pattern 失败" >&2
             popd >/dev/null
             exit 1
         fi
         git checkout --quiet
         popd >/dev/null
+        
+        # M12: pin 必须在目录搬移之前（搬移的内容才与 pin 一致）
+        apply_pin "$name" "$target_dir" "$pin_sha"
         
         if [ -n "$move_from" ] && [ -n "$move_to" ]; then
             rm -rf "$move_to" 2>/dev/null || true
@@ -55,6 +93,8 @@ clone_packages() {
             echo "错误：从 $repo_url 克隆 $name 仓库失败" >&2
             exit 1
         fi
+        # M12: pin（depth=1 只有 tip，按需单独 fetch 目标 SHA）
+        apply_pin "$name" "$target_dir" "$pin_sha"
     fi
     
     if [ -n "$post_cmd" ]; then
@@ -85,7 +125,9 @@ clone_lucky() {
     clone_packages "luci-app-lucky" \
         "$LUCKY_REPO" \
         "$TEMP_DIR" \
-        "lucky luci-app-lucky"
+        "lucky luci-app-lucky" \
+        "" "" "" "" \
+        "$PIN_LUCKY"
 
     mv "$TEMP_DIR/lucky" "$LUCKY_DIR"
     mv "$TEMP_DIR/luci-app-lucky" "$LUCI_APP_LUCKY_DIR"
@@ -114,7 +156,8 @@ clone_easytier() {
         "" \
         "" \
         "$TEMP_DIR/luci-app-easytier" \
-        "$EASYTIER_DIR"
+        "$EASYTIER_DIR" \
+        "$PIN_EASYTIER"
 
     rm -rf "$TEMP_DIR"
 }
@@ -129,7 +172,9 @@ clone_quickfile() {
         "$TEMP_DIR" \
         "luci-app-quickfile quickfile" \
         "" \
-        "mkdir -p \"$QUICKFILE_DIR\" && rm -rf \"$QUICKFILE_DIR/luci-app-quickfile\" \"$QUICKFILE_DIR/quickfile\" && mv \"$TEMP_DIR/luci-app-quickfile\" \"$TEMP_DIR/quickfile\" \"$QUICKFILE_DIR/\""
+        "mkdir -p \"$QUICKFILE_DIR\" && rm -rf \"$QUICKFILE_DIR/luci-app-quickfile\" \"$QUICKFILE_DIR/quickfile\" && mv \"$TEMP_DIR/luci-app-quickfile\" \"$TEMP_DIR/quickfile\" \"$QUICKFILE_DIR/\"" \
+        "" "" \
+        "$PIN_QUICKFILE"
 
     rm -rf "$TEMP_DIR"
 }
@@ -152,5 +197,7 @@ clone_luci_tailscale() {
         "$TEMP_DIR" \
         "" \
         "" \
-        "rm -rf \"$TARGET_DIR\" 2>/dev/null || true; mv \"$TEMP_DIR/luci-app-tailscale-community\" \"$TARGET_DIR\"; rm -rf \"$TEMP_DIR\""
+        "rm -rf \"$TARGET_DIR\" 2>/dev/null || true; mv \"$TEMP_DIR/luci-app-tailscale-community\" \"$TARGET_DIR\"; rm -rf \"$TEMP_DIR\"" \
+        "" "" \
+        "$PIN_TAILSCALE"
 }

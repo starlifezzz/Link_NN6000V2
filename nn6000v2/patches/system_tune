@@ -78,6 +78,23 @@ apply() {
         logger -t "$PROG" "LAN IPv6 stateful DHCPv6 enforced"
     fi
 
+    # 3) uhttpd 只绑回环（对抗 crash loop，2026-10 实测）:
+    #    nginx 占用 80/443，uhttpd 监听 0.0.0.0:80 时一旦被运行期拉起
+    #    就 bind 失败 → procd 每 5s 重启刷错日志（incarnation 可达三位数）。
+    #    uhttpd 仅为 uhttpd -m 哈希工具保留（见 fix_luci_rpcd 注释），
+    #    改绑 127.0.0.1:8080 后: 即使被任何组件拉起也无端口冲突、
+    #    不暴露于 LAN/WAN。系统启动序中本脚本 START=19，晚于 uhttpd
+    #    被拉起的时间点时通过 restart 立即生效。
+    if [ "$(uci -q get uhttpd.main.listen_http)" != "127.0.0.1:8080" ]; then
+        uci -q delete uhttpd.main.listen_http
+        uci set uhttpd.main.listen_http='127.0.0.1:8080'
+        uci commit uhttpd
+        logger -t "$PROG" "uhttpd listen -> 127.0.0.1:8080 (nginx owns 80/443)"
+        if pidof uhttpd >/dev/null 2>&1; then
+            /etc/init.d/uhttpd restart 2>/dev/null
+        fi
+    fi
+
     return 0
 }
 

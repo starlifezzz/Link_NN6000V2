@@ -64,8 +64,10 @@ remove_uhttpd_dependency() {
 
     if grep -q "CONFIG_PACKAGE_luci-app-quickfile=y" "$config_path"; then
         if [ -f "$luci_makefile_path" ]; then
-            sed -i '/luci-light/d' "$luci_makefile_path"
-            echo "Removed uhttpd (luci-light) dependency as luci-app-quickfile (nginx) is enabled."
+            # M6: 只删 +luci-light token，不再删整行 —— 旧行为 `/luci-light/d`
+            # 会把任何含该串的行（若上游把 DEPENDS 合并成单行则含全部依赖）连带删除。
+            sed -i 's/+luci-light//g' "$luci_makefile_path"
+            echo "Removed uhttpd (luci-light) dependency token as luci-app-quickfile (nginx) is enabled."
         fi
     fi
 }
@@ -77,6 +79,7 @@ apply_config() {
 fix_netfilter_kmod_clash() {
     local include_netfilter_mk="$BASE_PATH/../$BUILD_DIR/include/netfilter.mk"
     local netfilter_mk="$BASE_PATH/../$BUILD_DIR/package/kernel/linux/modules/netfilter.mk"
+    local changed=0
 
     if [ ! -f "$include_netfilter_mk" ]; then
         echo "Netfilter include file not found: $include_netfilter_mk" >&2
@@ -99,33 +102,44 @@ fix_netfilter_kmod_clash() {
         echo "Updating NF_IPT mapping for Linux 6.12/6.18..."
         sed -i 's@$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT,CONFIG_IP_NF_IPTABLES, $(P_V4)ip_tables),))@$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT,CONFIG_IP_NF_IPTABLES, $(P_V4)ip_tables, lt 6.12),))@' "$include_netfilter_mk"
         sed -i '/CONFIG_IP_NF_IPTABLES, $(P_V4)ip_tables, lt 6\.12)/a$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT,CONFIG_IP_NF_IPTABLES_LEGACY, $(P_V4)ip_tables, ge 6.12),))' "$include_netfilter_mk"
+        changed=1
     fi
 
     if grep -q '$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_CORE,CONFIG_IP_NF_IPTABLES, xt_standard ipt_icmp xt_tcp xt_udp xt_comment xt_set xt_SET)))' "$include_netfilter_mk"; then
         echo "Updating IPT_CORE userland mapping for Linux 6.12/6.18..."
         sed -i 's@$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_CORE,CONFIG_IP_NF_IPTABLES, xt_standard ipt_icmp xt_tcp xt_udp xt_comment xt_set xt_SET)))@$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_CORE,CONFIG_IP_NF_IPTABLES, xt_standard ipt_icmp xt_tcp xt_udp xt_comment xt_set xt_SET, lt 6.12)))@' "$include_netfilter_mk"
         sed -i '/CONFIG_IP_NF_IPTABLES, xt_standard ipt_icmp xt_tcp xt_udp xt_comment xt_set xt_SET, lt 6\.12))/a$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_CORE,CONFIG_IP_NF_IPTABLES_LEGACY, xt_standard ipt_icmp xt_tcp xt_udp xt_comment xt_set xt_SET, ge 6.12)))' "$include_netfilter_mk"
+        changed=1
     fi
 
     if grep -q '$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT6,CONFIG_IP6_NF_IPTABLES, $(P_V6)ip6_tables),))' "$include_netfilter_mk"; then
         echo "Updating NF_IPT6 mapping for Linux 6.12/6.18..."
         sed -i 's@$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT6,CONFIG_IP6_NF_IPTABLES, $(P_V6)ip6_tables),))@$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT6,CONFIG_IP6_NF_IPTABLES, $(P_V6)ip6_tables, lt 6.12),))@' "$include_netfilter_mk"
         sed -i '/CONFIG_IP6_NF_IPTABLES, $(P_V6)ip6_tables, lt 6\.12)/a$(eval $(if $(NF_KMOD),$(call nf_add,NF_IPT6,CONFIG_IP6_NF_IPTABLES_LEGACY, $(P_V6)ip6_tables, ge 6.12),))' "$include_netfilter_mk"
+        changed=1
     fi
 
     if grep -q '$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_IPV6,CONFIG_IP6_NF_IPTABLES, ip6t_icmp6)))' "$include_netfilter_mk"; then
         echo "Updating IPT_IPV6 userland mapping for Linux 6.12/6.18..."
         sed -i 's@$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_IPV6,CONFIG_IP6_NF_IPTABLES, ip6t_icmp6)))@$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_IPV6,CONFIG_IP6_NF_IPTABLES, ip6t_icmp6, lt 6.12)))@' "$include_netfilter_mk"
         sed -i '/CONFIG_IP6_NF_IPTABLES, ip6t_icmp6, lt 6\.12))/a$(eval $(if $(NF_KMOD),,$(call nf_add,IPT_IPV6,CONFIG_IP6_NF_IPTABLES_LEGACY, ip6t_icmp6, ge 6.12)))' "$include_netfilter_mk"
+        changed=1
     fi
 
     if grep -q 'DEPENDS:=+!LINUX_6_12:kmod-iptables' "$netfilter_mk"; then
         echo "Applying netfilter kmod clash workaround for Linux 6.12/6.18..."
         sed -i 's/DEPENDS:=+!LINUX_6_12:kmod-iptables/DEPENDS:=+(!(LINUX_6_12||LINUX_6_18)):kmod-iptables/' "$netfilter_mk"
+        changed=1
         return 0
     fi
 
-    echo "Netfilter kmod clash workaround applied successfully"
+    # M8: 只有实际改动过才算成功 —— 所有模式都不匹配 = 上游又变了，
+    # 旧版无条件打印 "applied successfully" 属假成功。
+    if [ "$changed" = "1" ]; then
+        echo "Netfilter kmod clash workaround applied successfully"
+    else
+        echo "警告: netfilter workaround 未匹配任何已知模式（上游结构可能已变化），请人工核对 include/netfilter.mk 与 package/kernel/linux/modules/netfilter.mk" >&2
+    fi
 }
 
 if [[ -d action_build ]]; then
@@ -194,7 +208,8 @@ restore_glinet_dts() {
     local patch_dir="$BASE_PATH/patches"
 
     if [ ! -d "$dts_dir" ]; then
-        echo "✗ Warning: qualcommax dts dir not found at $dts_dir, skip glinet dts restore"
+        # M10: set -e 下 return 1 必中止构建 —— 消息如实标注（dts 目录缺失 = 树不完整）
+        echo "✗ Error: qualcommax dts dir not found at $dts_dir，无法执行 glinet dts 防御性恢复，中止构建" >&2
         return 1
     fi
 
@@ -294,6 +309,11 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     # 仅影响本次 nowifi 构建（WiFi 版此前已构建完成）。
     qca_mk="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/Makefile"
     if [ -f "$qca_mk" ]; then
+        # M7: 备份 Makefile 并注册 EXIT trap —— nowifi 的 sed 是对共享源码树的
+        # 持久修改，若构建中断或本地目录复用，下次 WiFi 版构建会拿到被改过的
+        # DEFAULT_PACKAGES（静默丢失 wpad/ath11k）。构建结束/中断均恢复原文件。
+        cp -f "$qca_mk" "$qca_mk.nowifi.bak"
+        trap 'if [ -f "$qca_mk.nowifi.bak" ]; then mv -f "$qca_mk.nowifi.bak" "$qca_mk"; fi' EXIT
         # 注意: 名称必须是 wpad-mesh-openssl —— system.sh 的 fix_mk_def_depends
         # 已把默认的 wpad-openssl 替换成 wpad-mesh-openssl（真机包名证实），
         # 只写 wpad-openssl 不会匹配，nowifi 仍会带上 wpad。
@@ -307,7 +327,14 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     
     echo "编译无 WiFi 版本..."
     make -j$(($(nproc) + 1)) || make -j1 V=s
-    
+
+    # M7: nowifi 编译完成，立即恢复 Makefile 原状并解除 trap
+    if [ -f "$qca_mk.nowifi.bak" ]; then
+        mv -f "$qca_mk.nowifi.bak" "$qca_mk"
+        trap - EXIT
+        echo "✓ 已恢复 qualcommax/Makefile 原状（nowifi 后处理不再残留）"
+    fi
+
     echo "复制固件..."
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) | while read -r file; do
         filename=$(basename "$file")

@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       
       - name: Build System Setup
         run: |
@@ -66,8 +66,12 @@ jobs:
           echo "=== Disk Space After Cleanup ==="
           df -h
           
-          # 步骤 2: 初始化构建环境
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+          # 步骤 2: 初始化构建环境（M3 供应链加固: 下载后先 sha256 校验再执行）
+          # 上游脚本更新时校验会失败 —— 这是预期行为，请人工审阅新脚本后更新下面的哈希:
+          #   curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh | sha256sum
+          curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh -o /tmp/init_build_environment.sh
+          echo "85f4b2c2aa16f8178b57250f5d2bcf4a2e0707c6b569a3b07510f41fc6185dd8  /tmp/init_build_environment.sh" | sha256sum -c -
+          sudo bash /tmp/init_build_environment.sh
           
           # 步骤 3: 安装额外依赖
           sudo -E apt -yqq install dos2unix
@@ -87,10 +91,9 @@ jobs:
       - name: Set Build Date and Timezone
         run: |
           sudo -E timedatectl set-timezone "Asia/Shanghai"
-          export BUILD_DATE=$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")
+          # L5: 旧写法 TZ=UTC-8 依赖 POSIX TZ 反向符号的巧合语义，直书时区名
+          export BUILD_DATE=$(TZ=Asia/Shanghai date +"%y.%m.%d_%H.%M.%S")
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          export VERSION=$(TZ=UTC-8 date +"%y.%m.%d")
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "BUILD_SRC=${{ env.REPO_URL }}" >> $GITHUB_ENV
 
       - name: Clone Source Code
@@ -111,7 +114,7 @@ jobs:
           fi
 
       - name: Restore Build Dependencies Cache
-        uses: actions/cache/restore@v5.0.4
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ./action_build/.ccache
@@ -129,22 +132,38 @@ jobs:
           fi
 
       - name: Build Firmware
+        # M5: 输入经 env: 由 runner 直接注入环境变量（不经 shell 拼接），
+        # 替换逻辑用 python 函数式替换（值不进 sed/正则替换串），
+        # 并校验字符集（禁止 " ' ` $ \ 与非 ASCII —— 这些字符写进 992 会在
+        # 设备首启 sh 执行时造成破坏/注入）；账号与密码均不回显日志。
+        env:
+          PPPOE_USER: ${{ github.event.inputs.pppoe_username || '-' }}
+          PPPOE_PASS: ${{ github.event.inputs.pppoe_password || '-' }}
         run: |
-          # 设置 PPPoE 配置
-          PPPOE_USER="${{ github.event.inputs.pppoe_username || '-' }}"
-          PPPOE_PASS="${{ github.event.inputs.pppoe_password || '-' }}"
-          
-          if [ "$PPPOE_USER" != "-" ] || [ "$PPPOE_PASS" != "-" ]; then
-            echo "正在配置 PPPoE 账号密码..."
-            # 替换脚本中的 PPPoE 配置
-            sed -i "s#^PPPOE_USERNAME=.*#PPPOE_USERNAME=\"$PPPOE_USER\"#" ./nn6000v2/patches/992_network_config.sh
-            sed -i "s#^PPPOE_PASSWORD=.*#PPPOE_PASSWORD=\"$PPPOE_PASS\"#" ./nn6000v2/patches/992_network_config.sh
-            echo "PPPoE Username: $PPPOE_USER"
-            echo "PPPoE Password: [HIDDEN]"
-          else
-            echo "未输入 PPPoE 账号密码，使用默认值 '-'"
-          fi
-          
+          python3 - <<'PY'
+          import os, re, sys, pathlib
+          user = os.environ.get("PPPOE_USER", "-")
+          pw = os.environ.get("PPPOE_PASS", "-")
+          FORBIDDEN = set("\"'`$\\") | {"\n", "\r"}
+          def ok(s):
+              return not (set(s) & FORBIDDEN) and all(32 <= ord(c) < 127 for c in s)
+          if user != "-" and not ok(user):
+              print("PPPoE 用户名含非法字符（禁止 \" ' $ ` \\ 、换行与非 ASCII），已中止"); sys.exit(1)
+          if pw != "-" and not ok(pw):
+              print("PPPoE 密码含非法字符（禁止 \" ' $ ` \\ 、换行与非 ASCII），已中止；此类密码请刷机后手动配置"); sys.exit(1)
+          if user == "-" and pw == "-":
+              print("未输入 PPPoE 账号密码，使用默认值 '-'")
+              sys.exit(0)
+          p = pathlib.Path("./nn6000v2/patches/992_network_config.sh")
+          s = p.read_text()
+          s2 = re.sub(r'^PPPOE_USERNAME=.*$', lambda m: 'PPPOE_USERNAME="%s"' % user, s, count=1, flags=re.M)
+          s2 = re.sub(r'^PPPOE_PASSWORD=.*$', lambda m: 'PPPOE_PASSWORD="%s"' % pw, s2, count=1, flags=re.M)
+          if s2 == s:
+              print("错误: 992_network_config.sh 中未找到 PPPOE_USERNAME/PPPOE_PASSWORD 行"); sys.exit(1)
+          p.write_text(s2)
+          print("PPPoE 配置已注入（账号/密码不回显）")
+          PY
+
           ./nn6000v2/scripts/build.sh ${{ env.DEVICE_MODEL }}
           
           # 获取内核版本
@@ -199,7 +218,7 @@ jobs:
           echo "staging: $(du -sh ./action_build/staging_dir 2>/dev/null | cut -f 1 || echo 'N/A')"
 
       - name: Save Build Dependencies Cache
-        uses: actions/cache/save@v5.0.4
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: |
             ./action_build/.ccache
@@ -228,7 +247,7 @@ jobs:
           } > release_body.txt
 
       - name: Release Firmware
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ env.BUILD_DATE }}_${{ env.DEVICE_MODEL }}
           files: |
@@ -255,8 +274,10 @@ jobs:
           gh release list --json tagName,createdAt --jq 'sort_by(.tagName) | reverse | .[] | {tagName: .tagName, createdAt: .createdAt}'
           echo ""
           
-          # 获取所有发布（保留最新的 10 个）
-          RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[10:] | .[].tagName')
+          # 获取所有发布（保留最新的 30 个，与上方 run 记录保留策略一致 ——
+          # 旧值 10 会把仍可能需要回滚刷入的固件 Release 过早删掉；
+          # 代价约 +0.7GB GitHub 存储，如需回改 10 直接改此数字）
+          RELEASES=$(gh release list --json tagName --jq 'sort_by(.tagName) | reverse | .[30:] | .[].tagName')
           
           if [ -z "$RELEASES" ]; then
             echo "无需清理 Release"
@@ -281,8 +302,9 @@ jobs:
           gh run list --workflow release.yml --json name,databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[] | {name: .name, databaseId: .databaseId, createdAt: .createdAt}'
           echo ""
           
-          # 获取工作流运行记录，按创建时间排序，保留最新的 10 个
-          gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].databaseId' | while read -r run_id; do
+          # 获取工作流运行记录，按创建时间排序，保留最新的 30 个（M13: 旧值 10 条会让
+          # 失败构建日志过早被删、无法回溯排查）
+          gh run list --workflow release.yml --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[30:] | .[].databaseId' | while read -r run_id; do
             if [ -n "$run_id" ]; then
               echo "  删除工作流运行记录：$run_id"
               gh run delete "$run_id" 2>/dev/null || true

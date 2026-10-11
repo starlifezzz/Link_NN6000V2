@@ -1,0 +1,215 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# fix_overlay_shadow - 修复被 overlay 旧副本遮蔽的固件托管文件
+#
+# 背景（2026-10 三次实证的系统性问题）:
+#   sysupgrade 保留 /overlay 时，旧固件时代的文件副本会遮蔽新 /rom 中
+#   的同名文件，导致 HEAD 上的修复到不了设备：
+#   - init.d 脚本（实例: fix_firewall_harden 修复版被旧副本遮蔽）
+#   - uci-defaults（旧失败脚本遮蔽新版，重跑旧逻辑）
+#   - /etc/sysctl.d/zz-custom.conf
+#   - apk 数据库（旧固件 db 遮蔽 rom db，kernel 记录 6.18.44 vs
+#     实际运行 6.18.52 → apk upgrade 会拉入 vermagic 不匹配的 kmod）
+#
+# 处理规则:
+#   A) 托管文件白名单: overlay 副本比 /rom 旧（mtime）→ 删除，rom 生效；
+#      overlay 更新 → 保留并记录（尊重设备侧手工修复，如当前设备的
+#      fix_firewall_harden 修复版）。
+#   B) apk db: 仅当 overlay db 的 kernel V: 与 /rom 不一致（=整库来自
+#      旧固件）时重建: 以 rom db 为底 + 保留 overlay 独有包（运行期
+#      安装的 openclash/lucky 等），重建前备份原库。
+#
+# DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
+#
+# 时序: START=01 —— 必须早于所有被托管脚本（10/11/18/19/20/29/93）。
+# 注意: 本脚本随新固件刷入后才生效；对当前旧固件设备执行也安全
+#       （mtime 规则会保留更新的 overlay 副本）。
+######################################################################
+
+START=01
+
+PROG=fix_overlay_shadow
+
+# 固件托管文件白名单（均由本仓库 scripts/system.sh、build.sh 安装进镜像；
+# 运行期不应修改 —— 修改应提交仓库而非改设备）
+MANAGED_FILES="
+/etc/init.d/nss_tune
+/etc/init.d/fix_firewall_harden
+/etc/init.d/system_tune
+/etc/init.d/fix_luci_ucode
+/etc/init.d/fix_luci_rpcd
+/etc/init.d/fix_istorex
+/etc/init.d/smp_affinity
+/etc/init.d/fix_overlay_shadow
+/etc/init.d/emmc_health
+/usr/bin/luci_diag
+/usr/bin/nss_diag.sh
+/sbin/cpuusage
+/etc/sysctl.d/zz-custom.conf
+/etc/uci-defaults/990_set_argon_primary
+/etc/uci-defaults/991_custom_settings
+/etc/uci-defaults/992_network_config.sh
+/etc/uci-defaults/994_set_opkg_repos
+/etc/uci-defaults/996_fix_luci_homepage
+/etc/uci-defaults/997_install_nginx_icons
+/etc/uci-defaults/998_set_nss_freq
+"
+
+log() {
+    if [ -n "$DRYRUN" ]; then
+        echo "[DRYRUN] $*"
+    else
+        logger -t "$PROG" "$*"
+        echo "$*"
+    fi
+}
+
+# ---------- A) 托管文件同步 ----------
+sync_managed() {
+    local f upper
+    for f in $MANAGED_FILES; do
+        upper="/overlay/upper$f"
+        [ -f "$upper" ] && [ -f "/rom$f" ] || continue
+        if cmp -s "$upper" "/rom$f"; then
+            continue
+        fi
+        if [ "$upper" -ot "/rom$f" ]; then
+            if [ -n "$DRYRUN" ]; then
+                log "would rm stale overlay copy: $f (overlay older than rom)"
+            else
+                rm -f "$upper"
+                log "removed stale overlay copy: $f (rom wins)"
+            fi
+        else
+            log "overlay newer than rom, keep: $f"
+        fi
+    done
+}
+
+# ---------- B) apk 数据库重建 ----------
+db_kernel_v() {
+    awk '/^P:kernel$/{k=1;next} k&&/^V:/{sub(/^V:/,"");print;exit}' "$1" 2>/dev/null
+}
+
+sync_apk_db() {
+    local upper_db="/overlay/upper/lib/apk/db/installed"
+    local rom_db="/rom/lib/apk/db/installed"
+
+    [ -f "$upper_db" ] && [ -f "$rom_db" ] || return 0
+
+    local kv_upper kv_rom
+    kv_upper=$(db_kernel_v "$upper_db")
+    kv_rom=$(db_kernel_v "$rom_db")
+
+    # 一致 = 库健康（rom 底 + 运行期增量），不动
+    [ -n "$kv_rom" ] && [ "$kv_upper" = "$kv_rom" ] && return 0
+
+    log "apk db stale: overlay kernel=$kv_upper rom kernel=$kv_rom -> rebuild"
+
+    local n_rom n_upper n_keep
+    n_rom=$(grep -c '^P:' "$rom_db")
+    n_upper=$(grep -c '^P:' "$upper_db")
+
+    # apk db 块结构（2026-10 设备实测）: C:校验 → P:包名 → 字段 → 空行，
+    # 文件以 \n\n 结尾；因此必须按空行分段（RS=""）整块处理 —— 以 P: 为块首
+    # 的旧实现会把 C: 行错位（计数翻倍/丢 C:/孤儿 C: 块），DRYRUN 实测已证伪。
+    if [ -n "$DRYRUN" ]; then
+        n_keep=$(awk '
+            BEGIN { RS="" }
+            function pkg_of(b,   n, a, i) {
+                n = split(b, a, "\n")
+                for (i = 1; i <= n; i++)
+                    if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
+                return ""
+            }
+            NR == FNR {
+                if ($0 != "") { p = pkg_of($0); if (p != "") seen[p] = 1 }
+                next
+            }
+            {
+                if ($0 == "") next
+                p = pkg_of($0)
+                if (p != "" && !(p in seen)) c++
+            }
+            END { print c + 0 }
+        ' "$rom_db" "$upper_db")
+        log "DRYRUN: would rebuild db = rom($n_rom pkgs) + overlay-only($n_keep), backup of $n_upper-pkg db"
+        return 0
+    fi
+
+    local bak new
+    bak="${upper_db}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -f "$upper_db" "$bak"
+    new="${upper_db}.new"
+
+    # 新库 = 整个 rom db，追加 overlay 独有包（整块原样含 C: 行）
+    cp -f "$rom_db" "$new"
+    # 归一: 确保 rom 底以空行结尾，否则与首个人工追加块粘连
+    local nl
+    nl=$(tail -c2 "$new" | tr -dc '\n' | wc -c)
+    if [ "$nl" -lt 2 ]; then
+        if [ "$nl" -eq 1 ]; then printf '\n' >> "$new"; else printf '\n\n' >> "$new"; fi
+    fi
+    awk '
+        BEGIN { RS=""; ORS="" }
+        function pkg_of(b,   n, a, i) {
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
+            return ""
+        }
+        NR == FNR {
+            if ($0 != "") { p = pkg_of($0); if (p != "") seen[p] = 1 }
+            next
+        }
+        {
+            if ($0 == "") next
+            p = pkg_of($0)
+            if (p != "" && !(p in seen)) printf "%s\n\n", $0
+        }
+    ' "$rom_db" "$upper_db" >> "$new"
+
+    # 校验（三重，任一不过则放弃重建、保留原库）:
+    #   1) 含 kernel 记录且包数不少于 rom
+    #   2) P: 行数 == C: 行数（丢 C:/孤儿 C: 都会让两者不等）
+    #   3) 空行分段块数 == P: 行数（粘连合并会使块数偏少）
+    local p_cnt c_cnt n_blocks
+    p_cnt=$(grep -c '^P:' "$new")
+    c_cnt=$(grep -c '^C:' "$new")
+    n_blocks=$(awk 'BEGIN{RS=""} $0!=""{c++} END{print c+0}' "$new")
+    if grep -q '^P:kernel$' "$new" && \
+       [ "$p_cnt" -ge "$n_rom" ] && \
+       [ "$p_cnt" -eq "$c_cnt" ] && \
+       [ "$n_blocks" -eq "$p_cnt" ]; then
+        chmod 644 "$new"
+        mv -f "$new" "$upper_db"
+        log "apk db rebuilt: $p_cnt pkgs (was $n_upper, rom $n_rom); backup: $bak"
+    else
+        rm -f "$new"
+        log "apk db rebuild validation FAILED (p=$p_cnt c=$c_cnt blocks=$n_blocks rom=$n_rom), keep original (backup: $bak)"
+        return 1
+    fi
+}
+
+apply() {
+    sync_managed
+    sync_apk_db
+    if [ -z "$DRYRUN" ]; then
+        # 直写 /overlay/upper 绕过了 overlayfs 合并路径，已缓存的 dentry 不会
+        # 自动失效（2026-10 设备实测: rebuild 后合并视图 /lib/apk/db/installed
+        # 仍停在旧 inode/旧内容，apk 读到 521 条旧库；drop_caches 后才刷新为
+        # 新库 524 条）。sync+drop_caches 确保合并视图立即一致。
+        sync
+        echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+    fi
+    return 0
+}
+
+start() {
+    apply
+}
+
+boot() {
+    apply
+}

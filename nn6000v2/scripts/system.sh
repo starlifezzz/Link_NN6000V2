@@ -8,6 +8,10 @@ change_dnsmasq2full() {
 fix_default_set() {
     if [ -d "$BUILD_DIR/feeds/luci/collections/" ]; then
         find "$BUILD_DIR/feeds/luci/collections/" -type f -name "Makefile" -exec sed -i "s/luci-theme-bootstrap/luci-theme-$THEME_SET/g" {} \;
+        # M8: sed 后核验，上游改名时立刻暴露而不是静默失效
+        if ! grep -rq "luci-theme-$THEME_SET" "$BUILD_DIR/feeds/luci/collections/" 2>/dev/null; then
+            echo "警告: 主题替换 luci-theme-$THEME_SET 未命中任何 collections Makefile（上游可能改名），LuCI 主题可能不是 $THEME_SET" >&2
+        fi
     fi
 
     install -Dm544 "$BASE_PATH/patches/990_set_argon_primary" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/990_set_argon_primary"
@@ -42,6 +46,11 @@ fix_mk_def_depends() {
     sed -i 's/libustream-mbedtls/libustream-openssl/g' $BUILD_DIR/include/target.mk 2>/dev/null
     if [ -f $BUILD_DIR/target/linux/qualcommax/Makefile ]; then
         sed -i 's/wpad-openssl/wpad-mesh-openssl/g' $BUILD_DIR/target/linux/qualcommax/Makefile
+        # M8: 核验 wpad 替换生效（build.sh nowifi 段的 sed 依赖此包名，
+        #     见 build.sh:297 注释 —— 替换失败会导致 nowifi 仍带 wpad）
+        if ! grep -q "wpad-mesh-openssl" $BUILD_DIR/target/linux/qualcommax/Makefile; then
+            echo "警告: wpad-openssl -> wpad-mesh-openssl 未命中 qualcommax/Makefile（上游包名可能变化）" >&2
+        fi
     fi
 }
 
@@ -80,6 +89,10 @@ update_default_lan_addr() {
     local CFG_PATH="$BUILD_DIR/package/base-files/files/bin/config_generate"
     if [ -f $CFG_PATH ]; then
         sed -i 's/192\.168\.[0-9]*\.[0-9]*/'$LAN_ADDR'/g' $CFG_PATH
+        # M8: 核验 LAN 地址写入（失败 = 设备仍拿 192.168.x，属高影响静默失效）
+        if ! grep -q "$LAN_ADDR" $CFG_PATH; then
+            echo "警告: update_default_lan_addr 未在 config_generate 中找到 $LAN_ADDR（sed 未命中）" >&2
+        fi
     fi
 }
 
@@ -169,8 +182,10 @@ fix_nn6000_gpio_conflict() {
     local dts="$BUILD_DIR/target/linux/qualcommax/dts/ipq6000-link.dtsi"
 
     if [ ! -f "$dts" ]; then
-        echo "警告: 未找到 $dts，跳过 NN6000 按键 GPIO 冲突修复"
-        return 1
+        # M10: 打印"跳过"就必须真的跳过（旧版 return 1 在 set -e/errexit 下会中止整个构建，
+        # 消息与行为矛盾）。dts 缺失属上游改名/裁剪，降级为警告: 设备仅失去 WPS/reset 键修复。
+        echo "警告: 未找到 $dts，跳过 NN6000 按键 GPIO 冲突修复（WPS/reset 按键在本构建中可能失效）" >&2
+        return 0
     fi
 
     if grep -q 'blsp1_i2c3' "$dts"; then
@@ -201,7 +216,8 @@ install_tuning_scripts() {
     local target_dir="$BUILD_DIR/target/linux/qualcommax"
 
     if [ ! -d "$target_dir" ]; then
-        echo "警告: 未找到 qualcommax target，跳过调优脚本安装"
+        # M10: 缺 qualcommax target 意味着整棵树不完整，errexit 下 return 1 必中止 —— 消息如实标注
+        echo "错误: 未找到 qualcommax target ($target_dir)，无法安装调优脚本，中止构建" >&2
         return 1
     fi
 
@@ -212,6 +228,36 @@ install_tuning_scripts() {
     install -Dm755 "$BASE_PATH/patches/system_tune" \
         "$target_dir/base-files/etc/init.d/system_tune"
     echo "已安装 nss_tune / fix_firewall_harden / system_tune 脚本（sysctl_custom 已移除）"
+}
+
+# H3+H4: overlay 遮蔽修复（START=01，早于全部被托管脚本）
+#   - 托管文件白名单: 旧 overlay 副本让位于 /rom，新 overlay 副本保留
+#   - apk db: kernel V 与 rom 不一致（旧固件库）时以 rom 底重建
+install_overlay_shadow() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ ! -d "$target_dir" ]; then
+        echo "错误: 未找到 qualcommax target ($target_dir)，无法安装 fix_overlay_shadow，中止构建" >&2
+        return 1
+    fi
+
+    install -Dm755 "$BASE_PATH/patches/fix_overlay_shadow" \
+        "$target_dir/base-files/etc/init.d/fix_overlay_shadow"
+    echo "已安装 fix_overlay_shadow (START=01, overlay 遮蔽修复)"
+}
+
+# M1: eMMC I/O 错误启动期监测（START=96）
+install_emmc_health() {
+    local target_dir="$BUILD_DIR/target/linux/qualcommax"
+
+    if [ ! -d "$target_dir" ]; then
+        echo "错误: 未找到 qualcommax target ($target_dir)，无法安装 emmc_health，中止构建" >&2
+        return 1
+    fi
+
+    install -Dm755 "$BASE_PATH/patches/emmc_health" \
+        "$target_dir/base-files/etc/init.d/emmc_health"
+    echo "已安装 emmc_health (START=96, mmcblk0 I/O 错误监测)"
 }
 
 # uwsgi 启动优先级改为 93（quickstart S92 之后）
@@ -225,18 +271,6 @@ fix_uwsgi_start_priority() {
         echo "已覆盖 uwsgi/files/uwsgi.init（START=93，quickstart 之后）"
     else
         echo "警告: 未找到 uwsgi/files/ 目录或 patches/uwsgi.init，跳过"
-    fi
-}
-
-fix_hash_value() {
-    local makefile_path="$1"
-    local old_hash="$2"
-    local new_hash="$3"
-    local package_name="$4"
-
-    if [ -f "$makefile_path" ]; then
-        sed -i "s/$old_hash/$new_hash/g" "$makefile_path"
-        echo "已修正 $package_name 的哈希值。"
     fi
 }
 
@@ -261,12 +295,15 @@ change_cpuusage() {
 # 构建时直接写入 cron 任务到 base-files，不再依赖运行时 init.d 脚本
 set_custom_task() {
     local cron_dir="$BUILD_DIR/package/base-files/files/etc/crontabs"
+    local cron_file="$cron_dir/root"
     mkdir -p "$cron_dir"
-    cat >"$cron_dir/root" <<'EOF'
-3 3 12 12 * /usr/bin/nginx-util 'check_ssl'
-EOF
-    chmod 600 "$cron_dir/root"
-    echo "已写入 cron 任务到 base-files（构建时）"
+    # M11: 追加而非整文件覆盖 —— 若上游 root crontab 已有条目则保留
+    touch "$cron_file"
+    if ! grep -qF "nginx-util 'check_ssl'" "$cron_file" 2>/dev/null; then
+        echo "3 3 12 12 * /usr/bin/nginx-util 'check_ssl'" >>"$cron_file"
+    fi
+    chmod 600 "$cron_file"
+    echo "已写入 cron 任务到 base-files（构建时，追加模式）"
 }
 
 update_nss_diag() {
@@ -294,10 +331,9 @@ add_backup_info_to_sysupgrade() {
     local conf_path="$BUILD_DIR/package/base-files/files/etc/sysupgrade.conf"
 
     if [ -f "$conf_path" ]; then
-        cat >"$conf_path" <<'EOF'
-/etc/easytier
-/etc/lucky/
-EOF
+        # M11: 追加而非 cat > 整文件覆盖 —— 保留上游已有的保留条目/注释
+        grep -qx "/etc/easytier" "$conf_path" 2>/dev/null || echo "/etc/easytier" >>"$conf_path"
+        grep -qx "/etc/lucky/" "$conf_path" 2>/dev/null || echo "/etc/lucky/" >>"$conf_path"
     fi
 }
 
@@ -366,12 +402,15 @@ fix_nginx_configure() {
     local makefile_path="$BUILD_DIR/feeds/packages/net/nginx/Makefile"
     if [ -f "$makefile_path" ]; then
         # 移除不支持的 autotools 参数
-        sed -i 's/--target=.*\s//g' "$makefile_path"
-        sed -i 's/--host=.*\s//g' "$makefile_path"
-        sed -i 's/--disable-dependency-tracking\s//g' "$makefile_path"
-        sed -i 's/--program-prefix=.*\s//g' "$makefile_path"
-        sed -i 's/--program-suffix=.*\s//g' "$makefile_path"
-        echo "已修复 nginx 配置参数，移除不支持的 autotools 选项。"
+        # M9: 旧写法 `--target=.*\s` 的 `.*\s` 贪婪匹配会吃掉同一行中
+        # 目标参数之后的所有 token（如 --with-http_ssl_module）。
+        # 改为 `--token=value` 精确匹配，只删自身。
+        sed -i 's/--target=[^ ]*//g' "$makefile_path"
+        sed -i 's/--host=[^ ]*//g' "$makefile_path"
+        sed -i 's/--disable-dependency-tracking//g' "$makefile_path"
+        sed -i 's/--program-prefix=[^ ]*//g' "$makefile_path"
+        sed -i 's/--program-suffix=[^ ]*//g' "$makefile_path"
+        echo "已修复 nginx 配置参数，移除不支持的 autotools 选项（精确 token 版）。"
     else
         echo "错误：未找到 $makefile_path 文件，无法修复 nginx 配置。" >&2
     fi

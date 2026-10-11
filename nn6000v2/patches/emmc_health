@@ -1,0 +1,52 @@
+#!/bin/sh /etc/rc.common
+######################################################################
+# vim: set ft=sh
+# emmc_health - eMMC(mmcblk0) I/O 错误启动期监测
+#
+# 背景: 2026-10 实测开机 dmesg 出现
+#   "I/O error, dev mmcblk0, sector 131272" + SQUASHFS read error，
+#   rootfs squashfs 位于 eMMC —— 若坏块扩展将导致无法启动。
+#
+# 行为:
+#   - 每次开机统计本次 dmesg 的 mmcblk0 I/O 错误条数
+#   - 与上次记录比较，新增则 daemon.err 告警（提示尽快备份）
+#   - 无错误时静默；计数变化才写状态文件（控制 overlay 写入）
+#
+# 状态文件: /etc/emmc_health.count
+######################################################################
+
+START=96
+
+PROG=emmc_health
+STATE=/etc/emmc_health.count
+
+apply() {
+    local cur prev
+    cur=$(dmesg | grep -c "I/O error, dev mmcblk0" 2>/dev/null)
+    cur=${cur:-0}
+    prev=$(cat "$STATE" 2>/dev/null)
+    prev=${prev:-0}
+
+    if [ "$cur" -gt 0 ]; then
+        logger -p daemon.warn -t "$PROG" \
+            "本次启动 mmcblk0 I/O 错误 $cur 条（历史累计 $prev 条）"
+    fi
+
+    if [ "$cur" -gt "$prev" ]; then
+        logger -p daemon.err -t "$PROG" \
+            "mmcblk0 新增 I/O 错误: $prev -> $cur —— eMMC 健康恶化，请尽快备份数据/固件配置"
+    fi
+
+    if [ "$cur" != "$prev" ]; then
+        echo "$cur" > "$STATE"
+    fi
+    return 0
+}
+
+start() {
+    apply
+}
+
+boot() {
+    apply
+}
