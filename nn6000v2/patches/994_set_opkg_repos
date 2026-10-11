@@ -5,13 +5,19 @@
 #
 # 官方依据：
 #   - ImmortalWrt imm_init 机制：system.@imm_init[0].apk_mirror
-#   - USTC 镜像帮助：https://mirrors.ustc.edu.cn/help/immortalwrt.html
+#   - ZJU 镜像：https://mirror.zju.edu.cn/immortalwrt/snapshots
 #
 # ⚠️ 注意：此脚本在首次启动时由 /etc/init.d/boot 自动执行
 #          执行成功后会自动删除（uci-defaults 标准行为）
 # ============================================================================
 
-MIRROR_URL="https://mirrors.ustc.edu.cn/immortalwrt"
+# 镜像用 ZJU 而非 USTC：USTC 不镜像 snapshots（2026-10-10 实测全 404，
+# 仅 releases），本固件为 snapshots+apk 体系，USTC 源不可用。
+# 注意: 此值是"镜像根地址"，替换前缀 https://downloads.immortalwrt.org，
+# 原行自带的 /snapshots/... 路径保留 → 拼出正确的
+# https://mirror.zju.edu.cn/immortalwrt/snapshots/...（勿加 /snapshots 后缀，
+# 否则会出现 /snapshots/snapshots/ 重复路径）。
+MIRROR_URL="https://mirror.zju.edu.cn/immortalwrt"
 DISTFEEDS="/etc/apk/repositories.d/distfeeds.list"
 TMP_FEEDS="/tmp/distfeeds.list.new"
 
@@ -46,7 +52,12 @@ while IFS= read -r line; do
     esac
 
     # ---- 2a. 替换 ImmortalWrt 镜像源 ----
-    new_line=$(echo "$line" | sed -E "s|(${OLD_MIRRORS})|${MIRROR_URL}|g")
+    # 注意: OLD_MIRRORS 内含 `|` 分隔符，sed 分隔符必须避开（用 `#`），
+    # 否则 GNU/BusyBox sed 均报 "unknown option to 's'" / "bad option in
+    # substitution expression"，且失败时 new_line 为空会写空行清空源。
+    # || 与 -n 兜底: sed 失败或输出为空时保留原行。
+    new_line=$(echo "$line" | sed -E "s#${OLD_MIRRORS}#${MIRROR_URL}#g") || new_line="$line"
+    [ -n "$new_line" ] || new_line="$line"
 
     # ---- 2b. 跳过已知不可用的 feed ----
     # istoreos: iStoreOS 兼容源，ImmortalWrt 中使用会报错
