@@ -17,8 +17,17 @@
 #      overlay 更新 → 保留并记录（尊重设备侧手工修复，如当前设备的
 #      fix_firewall_harden 修复版）。
 #   B) apk db: 仅当 overlay db 的 kernel V: 与 /rom 不一致（=整库来自
-#      旧固件）时重建: 以 rom db 为底 + 保留 overlay 独有包（运行期
-#      安装的 openclash/lucky 等），重建前备份原库。
+#      旧固件）或存在死记录时重建: 以 rom db 为底 + 保留 overlay 独有包
+#      （运行期安装的 openclash/lucky 等），重建前备份原库。
+#      死记录 = overlay 独有且 D:kernel= 与当前内核不匹配的旧 kmod，
+#      及依赖它们的级联包（2026-10 实测: 死 kmod-nft-fullcone 与新镜像
+#      fullconenat-sonic 冲突、死 kmod-ipt-ipopt/nft-compat 钉死 6.18.44，
+#      使 apk add/del/fix 全部 rc=99 无法自愈；这些记录对应 .ko 已随旧
+#      /rom 消失，属幻影记录，必须剔除）。
+#   C) apk world: 每次开机核对（幂等）: rom world 为底 + overlay 独有包名。
+#      overlay world 会残留旧镜像版本钉死（kernel=6.18.44/base-files=1~4b85d5d
+#      与损坏条目，2026-10 实测使 apk add/fix 全部 breaks world 失败），
+#      且 db 重建(B) 不碰 world，必须独立同步。
 #
 # DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
 #
@@ -92,6 +101,70 @@ db_kernel_v() {
     awk '/^P:kernel$/{k=1;next} k&&/^V:/{sub(/^V:/,"");print;exit}' "$1" 2>/dev/null
 }
 
+# 死记录扫描。参数: <rom_db> <upper_db>
+# 输出: 首行 "<overlay独有数> <死记录数>"，其后每行一个死记录包名。
+# 死记录 = overlay 独有包中 D:kernel= 与 rom kernel V: 不匹配者，
+# 以及依赖死记录的 overlay 独有包（依赖闭包，迭代至不动点）。
+# 2026-10 设备实测最终集合一致性（所有普通依赖可解析、无冲突违反）= 0/0。
+stale_scan() {
+    awk '
+        BEGIN { RS="" }
+        function pkg_of(b,   n, a, i) {
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
+            return ""
+        }
+        function field_of(b, key,   n, a, i, kl) {
+            kl = length(key)
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, kl+1) == key ":") return substr(a[i], kl+2)
+            return ""
+        }
+        NR == FNR {
+            if ($0 == "") next
+            p = pkg_of($0); if (p == "") next
+            rom[p] = 1
+            if (p == "kernel") kv = field_of($0, "V")
+            next
+        }
+        {
+            if ($0 == "") next
+            p = pkg_of($0); if (p == "" || p in rom) next
+            np++; on[np] = p; od[np] = field_of($0, "D")
+        }
+        END {
+            # 1) kernel 依赖不匹配
+            for (i = 1; i <= np; i++) {
+                nt = split(od[i], tok, " ")
+                for (j = 1; j <= nt; j++)
+                    if (substr(tok[j], 1, 7) == "kernel=" && substr(tok[j], 8) != kv) {
+                        drop[on[i]] = 1; break
+                    }
+            }
+            # 2) 依赖闭包（跳过 cmd:/so:/pc: 与 !冲突项；剥版本约束）
+            do {
+                ch = 0
+                for (i = 1; i <= np; i++) {
+                    if (on[i] in drop) continue
+                    nt = split(od[i], tok, " ")
+                    for (j = 1; j <= nt; j++) {
+                        t = tok[j]
+                        if (t ~ /:/ || t ~ /^!/) continue
+                        sub(/[<>=].*/, "", t)
+                        if (t in drop) { drop[on[i]] = 1; ch = 1; break }
+                    }
+                }
+            } while (ch)
+            nd = 0
+            for (d in drop) nd++
+            printf "%d %d\n", np + 0, nd
+            for (d in drop) print d
+        }
+    ' "$1" "$2"
+}
+
 sync_apk_db() {
     local upper_db="/overlay/upper/lib/apk/db/installed"
     local rom_db="/rom/lib/apk/db/installed"
@@ -102,39 +175,31 @@ sync_apk_db() {
     kv_upper=$(db_kernel_v "$upper_db")
     kv_rom=$(db_kernel_v "$rom_db")
 
-    # 一致 = 库健康（rom 底 + 运行期增量），不动
-    [ -n "$kv_rom" ] && [ "$kv_upper" = "$kv_rom" ] && return 0
+    # 死记录扫描（同时给出 overlay 独有数）
+    local scan n_ov n_drop drop_names
+    scan=$(stale_scan "$rom_db" "$upper_db")
+    n_ov=$(echo "$scan" | head -1 | awk '{print $1}')
+    n_drop=$(echo "$scan" | head -1 | awk '{print $2}')
+    drop_names=$(echo "$scan" | tail -n +2)
 
-    log "apk db stale: overlay kernel=$kv_upper rom kernel=$kv_rom -> rebuild"
+    # kernel 版本一致 且 无死记录 = 库健康（rom 底 + 运行期增量），不动
+    if [ -n "$kv_rom" ] && [ "$kv_upper" = "$kv_rom" ] && [ "$n_drop" -eq 0 ]; then
+        return 0
+    fi
+
+    log "apk db: overlay kernel=$kv_upper rom kernel=$kv_rom stale=$n_drop -> rebuild"
 
     local n_rom n_upper n_keep
     n_rom=$(grep -c '^P:' "$rom_db")
     n_upper=$(grep -c '^P:' "$upper_db")
+    n_keep=$((n_ov - n_drop))
 
     # apk db 块结构（2026-10 设备实测）: C:校验 → P:包名 → 字段 → 空行，
     # 文件以 \n\n 结尾；因此必须按空行分段（RS=""）整块处理 —— 以 P: 为块首
     # 的旧实现会把 C: 行错位（计数翻倍/丢 C:/孤儿 C: 块），DRYRUN 实测已证伪。
     if [ -n "$DRYRUN" ]; then
-        n_keep=$(awk '
-            BEGIN { RS="" }
-            function pkg_of(b,   n, a, i) {
-                n = split(b, a, "\n")
-                for (i = 1; i <= n; i++)
-                    if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
-                return ""
-            }
-            NR == FNR {
-                if ($0 != "") { p = pkg_of($0); if (p != "") seen[p] = 1 }
-                next
-            }
-            {
-                if ($0 == "") next
-                p = pkg_of($0)
-                if (p != "" && !(p in seen)) c++
-            }
-            END { print c + 0 }
-        ' "$rom_db" "$upper_db")
-        log "DRYRUN: would rebuild db = rom($n_rom pkgs) + overlay-only($n_keep), backup of $n_upper-pkg db"
+        log "DRYRUN: would rebuild db = rom($n_rom) + keep($n_keep = overlay-only $n_ov - stale $n_drop), backup of $n_upper-pkg db"
+        [ -n "$drop_names" ] && log "DRYRUN: would drop stale: $(echo $drop_names)"
         return 0
     fi
 
@@ -151,8 +216,13 @@ sync_apk_db() {
     if [ "$nl" -lt 2 ]; then
         if [ "$nl" -eq 1 ]; then printf '\n' >> "$new"; else printf '\n\n' >> "$new"; fi
     fi
-    awk '
-        BEGIN { RS=""; ORS="" }
+    # 追加 overlay 独有包（整块原样含 C: 行），剔除死记录 skip 列表
+    awk -v skip="$drop_names" '
+        BEGIN {
+            RS=""; ORS=""
+            ns = split(skip, sk, " ")
+            for (i = 1; i <= ns; i++) if (sk[i] != "") dropset[sk[i]] = 1
+        }
         function pkg_of(b,   n, a, i) {
             n = split(b, a, "\n")
             for (i = 1; i <= n; i++)
@@ -166,28 +236,130 @@ sync_apk_db() {
         {
             if ($0 == "") next
             p = pkg_of($0)
-            if (p != "" && !(p in seen)) printf "%s\n\n", $0
+            if (p != "" && !(p in seen) && !(p in dropset)) printf "%s\n\n", $0
         }
     ' "$rom_db" "$upper_db" >> "$new"
 
-    # 校验（三重，任一不过则放弃重建、保留原库）:
-    #   1) 含 kernel 记录且包数不少于 rom
-    #   2) P: 行数 == C: 行数（丢 C:/孤儿 C: 都会让两者不等）
-    #   3) 空行分段块数 == P: 行数（粘连合并会使块数偏少）
-    local p_cnt c_cnt n_blocks
+    # 校验（四重，任一不过则放弃重建、保留原库）:
+    #   1) 含 kernel 记录
+    #   2) P: 行数 == 精确期望 rom + (overlay独有 - 死记录)
+    #   3) P: 行数 == C: 行数（丢 C:/孤儿 C: 都会让两者不等）
+    #   4) 空行分段块数 == P: 行数（粘连合并会使块数偏少）
+    local p_cnt c_cnt n_blocks n_expect
+    n_expect=$((n_rom + n_ov - n_drop))
     p_cnt=$(grep -c '^P:' "$new")
     c_cnt=$(grep -c '^C:' "$new")
     n_blocks=$(awk 'BEGIN{RS=""} $0!=""{c++} END{print c+0}' "$new")
     if grep -q '^P:kernel$' "$new" && \
-       [ "$p_cnt" -ge "$n_rom" ] && \
+       [ "$p_cnt" -eq "$n_expect" ] && \
        [ "$p_cnt" -eq "$c_cnt" ] && \
        [ "$n_blocks" -eq "$p_cnt" ]; then
         chmod 644 "$new"
         mv -f "$new" "$upper_db"
-        log "apk db rebuilt: $p_cnt pkgs (was $n_upper, rom $n_rom); backup: $bak"
+        log "apk db rebuilt: $p_cnt pkgs (was $n_upper, rom $n_rom, dropped $n_drop stale); backup: $bak"
     else
         rm -f "$new"
-        log "apk db rebuild validation FAILED (p=$p_cnt c=$c_cnt blocks=$n_blocks rom=$n_rom), keep original (backup: $bak)"
+        log "apk db rebuild validation FAILED (p=$p_cnt expect=$n_expect c=$c_cnt blocks=$n_blocks), keep original (backup: $bak)"
+        return 1
+    fi
+}
+
+# ---------- C) apk world 同步 ----------
+# 2026-10 设备实证: /etc/apk/world 是 conffile，sysupgrade 保留 overlay 时
+# 旧镜像 world（钉死 kernel=6.18.44~ / base-files=1~4b85d5d，还含损坏条目
+# luci-app-openclash><Q1P...）遮蔽 rom world → apk add/fix 报
+# "breaks: world[...]" 全部失败。db 重建(B)不碰 world，必须独立同步。
+# 规则: new world = rom world（正确钉死）∪ overlay 独有包名（db 差集，纯包名，
+# 构造上不可能引入 rom 之外的钉死项）；与现状一致则不写不备份。
+sync_apk_world() {
+    local upper_world="/overlay/upper/etc/apk/world"
+    local rom_world="/rom/etc/apk/world"
+    local upper_db="/overlay/upper/lib/apk/db/installed"
+    local rom_db="/rom/lib/apk/db/installed"
+
+    [ -f "$rom_world" ] || return 0
+    [ -f "$upper_world" ] || return 0   # 无 overlay world = 合并视图即 rom（健康）
+    [ -f "$upper_db" ] && [ -f "$rom_db" ] || return 0
+
+    # overlay 独有包名（与 B 段同款段落 awk，设备实测验证过；P: 行不含版本）
+    local overlay_only
+    overlay_only=$(awk '
+        BEGIN { RS="" }
+        function pkg_of(b,   n, a, i) {
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
+            return ""
+        }
+        NR == FNR {
+            if ($0 != "") { p = pkg_of($0); if (p != "") seen[p] = 1 }
+            next
+        }
+        {
+            if ($0 == "") next
+            p = pkg_of($0)
+            if (p != "" && !(p in seen)) print p
+        }
+    ' "$rom_db" "$upper_db")
+
+    # 剔除死记录，与 B 段口径一致（DRYRUN 时 db 未重建，实跑时 db 已先重建
+    # → 本过滤幂等为空；db 重建若校验失败被放弃，world 也不会要求死 kmod）
+    local drop_s kept_only
+    drop_s=$(stale_scan "$rom_db" "$upper_db" | tail -n +2)
+    if [ -n "$drop_s" ]; then
+        kept_only=""
+        for p in $overlay_only; do
+            echo "$drop_s" | grep -qxF "$p" || kept_only="$kept_only $p"
+        done
+        overlay_only=$kept_only
+    fi
+
+    local n_rom_w n_add p
+    n_rom_w=$(wc -l < "$rom_world")
+    n_add=0
+    for p in $overlay_only; do
+        grep -qxF "$p" "$rom_world" || n_add=$((n_add + 1))
+    done
+
+    if [ -n "$DRYRUN" ]; then
+        log "DRYRUN: would sync world = rom($n_rom_w) + overlay-only-add($n_add) lines; current upper=$(wc -l < "$upper_world")"
+        return 0
+    fi
+
+    local new
+    new="${upper_world}.new"
+    cp -f "$rom_world" "$new"
+    for p in $overlay_only; do
+        grep -qxF "$p" "$new" || printf '%s\n' "$p" >> "$new"
+    done
+
+    # 无变更 → 不写不备份（后续开机静默）
+    if cmp -s "$new" "$upper_world"; then
+        rm -f "$new"
+        return 0
+    fi
+
+    # 校验（三重，任一不过则放弃、保留原 world）:
+    #   1) 钉死项(kernel/base-files/libc)集合与 rom 完全一致（构造上只来自 rom，再验一次）
+    #   2) 无损坏 token(><)
+    #   3) overlay 独有包名全部在
+    local pin_rom pin_new bad_tok=0 miss=0
+    pin_rom=$(grep -E '^(kernel|base-files|libc)=' "$rom_world" | sort)
+    pin_new=$(grep -E '^(kernel|base-files|libc)=' "$new" | sort)
+    grep -q '><' "$new" && bad_tok=1
+    for p in $overlay_only; do
+        grep -qxF "$p" "$new" || miss=$((miss + 1))
+    done
+    if [ "$pin_rom" = "$pin_new" ] && [ "$bad_tok" -eq 0 ] && [ "$miss" -eq 0 ]; then
+        local bak
+        bak="${upper_world}.bak.$(date +%Y%m%d%H%M%S)"
+        cp -f "$upper_world" "$bak"
+        chmod 644 "$new"
+        mv -f "$new" "$upper_world"
+        log "world synced: $(wc -l < "$upper_world") lines (was $(wc -l < "$bak")); backup: $bak"
+    else
+        rm -f "$new"
+        log "world sync validation FAILED (bad_tok=$bad_tok missing=$miss), keep original"
         return 1
     fi
 }
@@ -195,6 +367,7 @@ sync_apk_db() {
 apply() {
     sync_managed
     sync_apk_db
+    sync_apk_world
     if [ -z "$DRYRUN" ]; then
         # 直写 /overlay/upper 绕过了 overlayfs 合并路径，已缓存的 dentry 不会
         # 自动失效（2026-10 设备实测: rebuild 后合并视图 /lib/apk/db/installed

@@ -515,12 +515,18 @@ fix_pbr_ip_forward() {
 }
 
 set_nginx_default_config() {
-    # nginx-ssl-util 安装的 UCI config 源文件是 files/nginx（→ /etc/config/nginx）
-    # 不是 files/nginx.config，也不是 /etc/nginx/conf.d/
-    local nginx_uci="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx"
+    # 源文件是 files/nginx.config（nginx-ssl-util Makefile:
+    #   $(INSTALL_CONF) ./files/nginx.config $(1)/etc/config/nginx；
+    #   openwrt/packages 与 immortalwrt/packages 的 net/nginx-util/files/ 均仅
+    #   有 nginx.config）。2026-10 刷机实证: 旧目标 files/nginx 不存在 →
+    #   [ -f ] 失败静默跳过 → 镜像保留通配监听（M2 未进镜像）。
+    local nginx_uci="$BUILD_DIR/feeds/packages/net/nginx-util/files/nginx.config"
     if [ -f "$nginx_uci" ] && [ -f "$BASE_PATH/patches/nginx.config" ]; then
         \cp -f "$BASE_PATH/patches/nginx.config" "$nginx_uci"
-        echo "已覆盖 nginx UCI config（files/nginx → /etc/config/nginx）"
+        echo "已覆盖 nginx UCI config（files/nginx.config → /etc/config/nginx）"
+    else
+        # 不 return 1: update.sh 有 set -e/errexit（system.sh:185 M10 同款教训），只大声报错
+        echo "错误: 未找到 $nginx_uci 或 patches/nginx.config，M2 监听收紧未进镜像" >&2
     fi
 
     # quickstart_icons.location：通过 uci-defaults 997 安装到 /etc/nginx/conf.d/
