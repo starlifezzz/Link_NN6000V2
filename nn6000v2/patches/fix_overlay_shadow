@@ -25,8 +25,8 @@
 #      使 apk add/del/fix 全部 rc=99 无法自愈；这些记录对应 .ko 已随旧
 #      /rom 消失，属幻影记录，必须剔除）。
 #   C) apk world: 每次开机核对（幂等）: rom world 为底 + overlay 独有包名。
-#      overlay world 会残留旧镜像版本钉死（kernel=6.18.44/base-files=1~4b85d5d
-#      与损坏条目，2026-10 实测使 apk add/fix 全部 breaks world 失败），
+#      overlay world 会残留旧镜像版本钉死（kernel=6.18.44/base-files=1~4b85d5d，
+#      2026-10 实测使 apk add/fix 全部 breaks world 失败），
 #      且 db 重建(B) 不碰 world，必须独立同步。
 #
 # DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
@@ -266,9 +266,12 @@ sync_apk_db() {
 
 # ---------- C) apk world 同步 ----------
 # 2026-10 设备实证: /etc/apk/world 是 conffile，sysupgrade 保留 overlay 时
-# 旧镜像 world（钉死 kernel=6.18.44~ / base-files=1~4b85d5d，还含损坏条目
-# luci-app-openclash><Q1P...）遮蔽 rom world → apk add/fix 报
-# "breaks: world[...]" 全部失败。db 重建(B)不碰 world，必须独立同步。
+# 旧镜像 world（钉死 kernel=6.18.44~ / base-files=1~4b85d5d）遮蔽 rom world
+# → apk add/fix 报 "breaks: world[...]" 全部失败。db 重建(B)不碰 world，
+# 必须独立同步。
+# 注: 行尾 `包名><Q1...=`（如 luci-app-openclash><Q1...）并非损坏 —— 那是 apk
+#     本地装包时写的合法 pin operator（apk 可正常解析，实测 rc=0）；本函数以
+#     纯包名构造候选 world，开机会把此类 token 规范化掉。
 # 规则: new world = rom world（正确钉死）∪ overlay 独有包名（db 差集，纯包名，
 # 构造上不可能引入 rom 之外的钉死项）；与现状一致则不写不备份。
 sync_apk_world() {
@@ -341,7 +344,8 @@ sync_apk_world() {
 
     # 校验（三重，任一不过则放弃、保留原 world）:
     #   1) 钉死项(kernel/base-files/libc)集合与 rom 完全一致（构造上只来自 rom，再验一次）
-    #   2) 无损坏 token(><)
+    #   2) 候选行不含 apk operator token(><)（候选由纯包名构造，构造上恒真，
+    #      此处为防御性校验）
     #   3) overlay 独有包名全部在
     local pin_rom pin_new bad_tok=0 miss=0
     pin_rom=$(grep -E '^(kernel|base-files|libc)=' "$rom_world" | sort)
