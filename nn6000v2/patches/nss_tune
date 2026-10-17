@@ -26,7 +26,30 @@ START=29
 
 PROG=nss_tune
 
+# NSS 频率档位强制为 high
+#   背景: 原实现放在一次性 uci-defaults 998_set_nss_freq，会被 overlay "白化"
+#   （删除标记）遮蔽 → 永不重跑（2026-10-17 实证: 设备长期停在 mid=748.8MHz）。
+#   放到运行期 init（每次开机执行）即可免疫该遮蔽。
+#   本函数只改 uci 配置；硬件频率由 nss_freq 服务（START=95）读取后应用，
+#   因此不依赖 NSS 驱动此刻是否已就绪。
+# 移除条件: 若上游/rom 默认 config 已保证档位、或 998 不再会被遮蔽。
+enforce_nss_freq_level() {
+    uci -q get nss_freq.settings >/dev/null 2>&1 || return 0
+
+    [ "$(uci -q get nss_freq.settings.level)" = "high" ] && return 0
+
+    uci -q set nss_freq.settings.level='high' || return 0
+    uci -q commit nss_freq || return 0
+    logger -t "$PROG" "nss_freq level 强制为 high"
+
+    # 立即应用（此时 NSS 未就绪则静默失败，仍由 nss_freq 服务 S95 应用）
+    [ -x /etc/init.d/nss_freq ] && /etc/init.d/nss_freq restart >/dev/null 2>&1
+    return 0
+}
+
 apply_nss_tune() {
+    enforce_nss_freq_level
+
     local t=8
 
     # 等待 NSS n2hcfg sysctl 就绪（qca-nss-drv 在 START=28 加载）
