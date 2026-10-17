@@ -16,6 +16,10 @@
 #   A) 托管文件白名单: overlay 副本比 /rom 旧（mtime）→ 删除，rom 生效；
 #      overlay 更新 → 保留并记录（尊重设备侧手工修复，如当前设备的
 #      fix_firewall_harden 修复版）。
+#      白化（overlay 删除标记＝字符设备 0,0）同样遮蔽 rom —— uci-default 被
+#      消费后留下的白化会让 rom 新版永不生效。若 rom 比白化新则移除白化，
+#      令该 default 下次开机重跑（2026-10-17 实证: 998_set_nss_freq 白化导致
+#      NSS 长期停在 mid=748.8MHz，未达预期的 high=1497.6MHz）。
 #   B) apk db: 仅当 overlay db 的 kernel V: 与 /rom 不一致（=整库来自
 #      旧固件）或存在死记录时重建: 以 rom db 为底 + 保留 overlay 独有包
 #      （运行期安装的 openclash/lucky 等），重建前备份原库。
@@ -79,7 +83,24 @@ sync_managed() {
     local f upper
     for f in $MANAGED_FILES; do
         upper="/overlay/upper$f"
-        [ -f "$upper" ] && [ -f "/rom$f" ] || continue
+        [ -e "$upper" ] && [ -f "/rom$f" ] || continue
+        # overlay"白化"（删除标记＝字符设备 0,0）: uci-default 被消费后留下的
+        # 白化会遮蔽 rom 同名文件，使其永不生效（[ -f ] 对白化恒假，旧版直接
+        # 跳过 → 永不修复）。仅当 rom 比白化新（rom 侧已更新）才移除白化，
+        # 令其下次开机重跑；否则视为已消费，保持不动。
+        if [ -c "$upper" ]; then
+            if [ "$upper" -ot "/rom$f" ]; then
+                if [ -n "$DRYRUN" ]; then
+                    log "would rm whiteout: $f (rom newer, will re-run)"
+                else
+                    rm -f "$upper"
+                    log "removed whiteout: $f (rom uci-default will re-run)"
+                fi
+            else
+                log "whiteout up-to-date, keep: $f"
+            fi
+            continue
+        fi
         if cmp -s "$upper" "/rom$f"; then
             continue
         fi
