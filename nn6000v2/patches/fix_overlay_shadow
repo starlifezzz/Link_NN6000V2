@@ -20,9 +20,14 @@
 #      消费后留下的白化会让 rom 新版永不生效。若 rom 比白化新则移除白化，
 #      令该 default 下次开机重跑（2026-10-17 实证: 998_set_nss_freq 白化导致
 #      NSS 长期停在 mid=748.8MHz，未达预期的 high=1497.6MHz）。
-#   B) apk db: 仅当 overlay db 的 kernel V: 与 /rom 不一致（=整库来自
-#      旧固件）或存在死记录时重建: 以 rom db 为底 + 保留 overlay 独有包
-#      （运行期安装的 openclash/lucky 等），重建前备份原库。
+#   B) apk db: 当 overlay db 与 /rom 基线不一致时重建: kernel V: 不同（整库
+#      来自旧固件）、存在死记录、rom 有而 overlay db 缺的包（新镜像新增包）、
+#      或 rom world 的版本钉死（base-files=/kernel=/libc=）在 db 中不满足，
+#      均触发重建。以 rom db 为底 + 保留 overlay 独有包（运行期安装的
+#      openclash/lucky 等），重建前备份原库。
+#      2026-10 实测（r0-63c7fdb -> r0-f9b0ce7）: kernel 未变、无死记录，
+#      但 base-files 换代 + 新增 ucode-mod-math；只看 kernel 会误判健康，
+#      apk add/fix 全部 breaks。
 #      死记录 = overlay 独有且 D:kernel= 与当前内核不匹配的旧 kmod，
 #      及依赖它们的级联包（2026-10 实测: 死 kmod-nft-fullcone 与新镜像
 #      fullconenat-sonic 冲突、死 kmod-ipt-ipopt/nft-compat 钉死 6.18.44，
@@ -186,9 +191,57 @@ stale_scan() {
     ' "$1" "$2"
 }
 
+# rom 基线覆盖检查。参数: <rom_db> <upper_db> <rom_world>
+# 输出: "<rom 有而 upper db 缺的包数> <rom world 版本钉死不满足的条数>"
+# 2026-10 设备实测（r0-63c7fdb -> r0-f9b0ce7）: kernel 版本未变、无死记录，
+# 但新镜像换了 base-files 版本并新增 ucode-mod-math；只看 kernel 会判"健康"，
+# 结果 apk add/fix 全部 breaks。此处把「新镜像基线是否被 overlay db 覆盖」
+# 也纳入判据：缺包或 world 钉死版本对不上都要重建。
+rom_baseline_scan() {
+    # 注意: 不能用 getline < world —— 本 awk 用 RS="" 分段解析 db，
+    # getline 会继承该 RS，把整个 world（无空行）读成一条记录。
+    # 故先按行拼成 '|' 分隔串传入（包名/版本不含 '|'）。
+    local wl
+    wl=$(tr '\n' '|' < "$3" 2>/dev/null)
+    awk -v wl="$wl" '
+        BEGIN { RS="" }
+        function pkg_of(b,   n, a, i) {
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, 2) == "P:") return substr(a[i], 3)
+            return ""
+        }
+        function ver_of(b,   n, a, i) {
+            n = split(b, a, "\n")
+            for (i = 1; i <= n; i++)
+                if (substr(a[i], 1, 2) == "V:") return substr(a[i], 3)
+            return ""
+        }
+        NR == FNR { p = pkg_of($0); if (p != "") rom_v[p] = ver_of($0); next }
+        { p = pkg_of($0); if (p != "") { have[p] = 1; have_v[p] = ver_of($0) } }
+        END {
+            miss = 0
+            for (p in rom_v) if (!(p in have)) miss++
+            pin = 0
+            nw = split(wl, w, "|")
+            for (i = 1; i <= nw; i++) {
+                line = w[i]
+                if (line == "") continue
+                eq = index(line, "=")
+                if (eq < 2) continue
+                n = substr(line, 1, eq - 1); v = substr(line, eq + 1)
+                if (n ~ /[<>~]/) continue   # apk pin operator 令牌，跳过
+                if (!(n in have_v) || have_v[n] != v) pin++
+            }
+            printf "%d %d\n", miss, pin
+        }
+    ' "$1" "$2"
+}
+
 sync_apk_db() {
     local upper_db="/overlay/upper/lib/apk/db/installed"
     local rom_db="/rom/lib/apk/db/installed"
+    local rom_world="/rom/etc/apk/world"
 
     [ -f "$upper_db" ] && [ -f "$rom_db" ] || return 0
 
@@ -203,12 +256,21 @@ sync_apk_db() {
     n_drop=$(echo "$scan" | head -1 | awk '{print $2}')
     drop_names=$(echo "$scan" | tail -n +2)
 
-    # kernel 版本一致 且 无死记录 = 库健康（rom 底 + 运行期增量），不动
-    if [ -n "$kv_rom" ] && [ "$kv_upper" = "$kv_rom" ] && [ "$n_drop" -eq 0 ]; then
+    # rom 基线覆盖检查（新镜像的包 / 版本钉死是否已被 overlay db 覆盖）
+    local baseline n_miss n_pin
+    baseline=$(rom_baseline_scan "$rom_db" "$upper_db" "$rom_world")
+    n_miss=$(echo "$baseline" | awk '{print $1}')
+    n_pin=$(echo "$baseline" | awk '{print $2}')
+    n_miss=${n_miss:-0}
+    n_pin=${n_pin:-0}
+
+    # kernel 一致 + 无死记录 + rom 基线全覆盖 = 库健康，不动
+    if [ -n "$kv_rom" ] && [ "$kv_upper" = "$kv_rom" ] && \
+       [ "$n_drop" -eq 0 ] && [ "$n_miss" -eq 0 ] && [ "$n_pin" -eq 0 ]; then
         return 0
     fi
 
-    log "apk db: overlay kernel=$kv_upper rom kernel=$kv_rom stale=$n_drop -> rebuild"
+    log "apk db: overlay kernel=$kv_upper rom kernel=$kv_rom stale=$n_drop missing=$n_miss pin_mismatch=$n_pin -> rebuild"
 
     local n_rom n_upper n_keep
     n_rom=$(grep -c '^P:' "$rom_db")
@@ -219,7 +281,7 @@ sync_apk_db() {
     # 文件以 \n\n 结尾；因此必须按空行分段（RS=""）整块处理 —— 以 P: 为块首
     # 的旧实现会把 C: 行错位（计数翻倍/丢 C:/孤儿 C: 块），DRYRUN 实测已证伪。
     if [ -n "$DRYRUN" ]; then
-        log "DRYRUN: would rebuild db = rom($n_rom) + keep($n_keep = overlay-only $n_ov - stale $n_drop), backup of $n_upper-pkg db"
+        log "DRYRUN: would rebuild db = rom($n_rom) + keep($n_keep = overlay-only $n_ov - stale $n_drop), backup of $n_upper-pkg db (missing=$n_miss pin_mismatch=$n_pin)"
         [ -n "$drop_names" ] && log "DRYRUN: would drop stale: $(echo $drop_names)"
         return 0
     fi
