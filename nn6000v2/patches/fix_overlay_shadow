@@ -13,11 +13,12 @@
 #     实际运行 6.18.52 → apk upgrade 会拉入 vermagic 不匹配的 kmod）
 #
 # 处理规则:
-#   A) 托管文件白名单: overlay 副本比 /rom 旧（mtime）→ 删除，rom 生效；
-#      overlay 更新 → 保留并记录（尊重设备侧手工修复，如当前设备的
-#      fix_firewall_harden 修复版）。
+#   A) 托管文件白名单: 以内容 md5 状态判定（不能用 mtime —— /rom 文件 mtime
+#      是构建树检出时间，可能比 overlay 副本旧，会让 `-ot` 恒假）。
+#      overlay 副本内容==rom → rom 已生效；内容!=rom 且 rom/副本 md5 均未变
+#      → 视为设备侧本地改动保留；否则删除副本让 rom 生效。
 #      白化（overlay 删除标记＝字符设备 0,0）同样遮蔽 rom —— uci-default 被
-#      消费后留下的白化会让 rom 新版永不生效。若 rom 比白化新则移除白化，
+#      消费后留下的白化会让 rom 新版永不生效。rom 版本变了则移除白化，
 #      令该 default 下次开机重跑（2026-10-17 实证: 998_set_nss_freq 白化导致
 #      NSS 长期停在 mid=748.8MHz，未达预期的 high=1497.6MHz）。
 #   B) apk db: 当 overlay db 与 /rom 基线不一致时重建: kernel V: 不同（整库
@@ -42,7 +43,7 @@
 #
 # 时序: START=01 —— 必须早于所有被托管脚本（10/11/18/19/20/29/93）。
 # 注意: 本脚本随新固件刷入后才生效；对当前旧固件设备执行也安全
-#       （mtime 规则会保留更新的 overlay 副本）。
+#       （首次无记录时非白化副本一律让 rom 生效；白化则保留不动）。
 ######################################################################
 
 START=01
@@ -84,41 +85,73 @@ log() {
 }
 
 # ---------- A) 托管文件同步 ----------
+# 判据用「内容 md5」而非 mtime。
+#   2026-10-20 实测: /rom 内文件 mtime 是构建树检出时间（Oct 15 21:41），
+#   比 overlay 副本（还原 iStore 备份带入，Oct 17 23:30）旧 → `[ upper -ot
+#   rom ]` 恒假 → 新固件的修复永远被旧副本遮蔽（本次 fix_overlay_shadow 新
+#   逻辑即因此未生效，apk db 仍停在 518）。
+# 规则: 托管文件以 rom 为准（本仓库约定这些文件运行期不应修改）。
+#   非白化副本: 内容==rom → 已生效；内容!=rom → 删除副本让 rom 生效。
+#   白化: 遮蔽 rom 且 [ -f ] 恒假。rom 内容变了才移除白化令 uci-default 重跑；
+#         否则保持（避免每次开机重复消费）。用状态文件记录上次决策时的
+#         rom md5 —— 没有它就只能靠 mtime，而 mtime 不可信。
+STATE_FILE="/etc/.fix_overlay_shadow.state"
+
+# 打印路径的记录（rom md5）；无记录则空
+state_get() {
+    [ -f "$STATE_FILE" ] || return 0
+    awk -v p="$1" '$2 == p { print $1; exit }' "$STATE_FILE"
+}
+
+# $1=path $2=rom_md5
+state_set() {
+    local tmp="$STATE_FILE.new"
+    if [ -f "$STATE_FILE" ]; then
+        awk -v p="$1" '$2 != p' "$STATE_FILE" > "$tmp"
+    else
+        : > "$tmp"
+    fi
+    printf '%s %s\n' "$2" "$1" >> "$tmp"
+    mv -f "$tmp" "$STATE_FILE"
+}
+
+md5_of() {
+    md5sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
 sync_managed() {
-    local f upper
+    local f upper rmd5 rec
+    [ -d /rom ] || return 0
     for f in $MANAGED_FILES; do
         upper="/overlay/upper$f"
-        [ -e "$upper" ] && [ -f "/rom$f" ] || continue
-        # overlay"白化"（删除标记＝字符设备 0,0）: uci-default 被消费后留下的
-        # 白化会遮蔽 rom 同名文件，使其永不生效（[ -f ] 对白化恒假，旧版直接
-        # 跳过 → 永不修复）。仅当 rom 比白化新（rom 侧已更新）才移除白化，
-        # 令其下次开机重跑；否则视为已消费，保持不动。
+        [ -f "/rom$f" ] || continue
+        rmd5=$(md5_of "/rom$f")
+        [ -n "$rmd5" ] || continue
+        rec=$(state_get "$f")
+
+        # overlay 无副本 → rom 已生效，无需处理
+        [ -e "$upper" ] || continue
+
+        # overlay"白化"（删除标记＝字符设备 0,0）
         if [ -c "$upper" ]; then
-            if [ "$upper" -ot "/rom$f" ]; then
-                if [ -n "$DRYRUN" ]; then
-                    log "would rm whiteout: $f (rom newer, will re-run)"
-                else
-                    rm -f "$upper"
-                    log "removed whiteout: $f (rom uci-default will re-run)"
-                fi
-            else
+            if [ -z "$rec" ]; then
+                state_set "$f" "$rmd5"
+                log "whiteout first seen, keep: $f"
+            elif [ "$rec" = "$rmd5" ]; then
                 log "whiteout up-to-date, keep: $f"
+            else
+                rm -f "$upper"
+                state_set "$f" "$rmd5"
+                log "removed whiteout: $f (rom updated, uci-default re-runs)"
             fi
             continue
         fi
+
         if cmp -s "$upper" "/rom$f"; then
             continue
         fi
-        if [ "$upper" -ot "/rom$f" ]; then
-            if [ -n "$DRYRUN" ]; then
-                log "would rm stale overlay copy: $f (overlay older than rom)"
-            else
-                rm -f "$upper"
-                log "removed stale overlay copy: $f (rom wins)"
-            fi
-        else
-            log "overlay newer than rom, keep: $f"
-        fi
+        rm -f "$upper"
+        log "removed stale overlay copy: $f (content != rom, rom wins)"
     done
 }
 
