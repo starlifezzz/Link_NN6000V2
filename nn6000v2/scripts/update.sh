@@ -39,6 +39,7 @@ main() {
     clean_up
     reset_feeds_conf
     update_feeds
+    fix_miniupnpd_patches
     update_golang
     clone_quickfile
     clone_lucky

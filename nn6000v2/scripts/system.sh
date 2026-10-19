@@ -382,6 +382,19 @@ fix_smartdns_makefile() {
     echo "smartdns Makefile 修复完成"
 }
 
+# 移除已被上游 2.3.11 吸收的 miniupnpd 补丁（VIKINGYFY 99c39ee7 起），
+# 否则 feed 补丁与源码不匹配导致 build 中断。
+# 移除条件：上游 miniupnpd 版本回退到 2.3.9 或补丁重新与源码匹配时，可删除本函数与调用。
+fix_miniupnpd_patches() {
+    local dir="$BUILD_DIR/feeds/packages/net/miniupnpd/patches"
+    local name
+    for name in 020-descr-filter-fix.patch 030-allow-private-fix.patch 040-improve-logging.patch; do
+        [ -f "$dir/$name" ] || continue
+        rm -f "$dir/$name"
+        echo "正在移除已被上游合并的 miniupnpd 补丁：$name"
+    done
+}
+
 update_nginx_ubus_module() {
     local makefile_path="$BUILD_DIR/feeds/packages/net/nginx/Makefile"
     local source_date="2024-03-02"
