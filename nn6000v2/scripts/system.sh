@@ -55,6 +55,27 @@ fix_mk_def_depends() {
     fi
 }
 
+fix_libffi_missing() {
+    # 2026-10-19 上游把 libffi 从 packages feed 迁入 core：
+    #   core 侧 openwrt/openwrt@9b835ec（新增 package/libs/libffi/Makefile）
+    #   feed 侧 immortalwrt/packages@70ac3a8（删除 libs/libffi）
+    # 但 VIKINGYFY core 尚未合并该提交 → glib2 的 DEPENDS "+libffi" 在 .config
+    # 求值时找不到同名包被静默丢弃，打包阶段 apk 报 "libffi (no such package)"。
+    # 兜底：core 缺失时注入本地 vendored 包（与上游 9b835ec 逐字节一致）。
+    # 上游合并后 [ -d ] 判据自动跳过，本函数成为空操作 → 可整段删除。
+    local dst="$BUILD_DIR/package/libs/libffi"
+    if [ -d "$dst" ]; then
+        return 0
+    fi
+    local src="$BASE_PATH/packages/libffi/Makefile"
+    if [ ! -f "$src" ]; then
+        echo "错误: $src 不存在，libffi 依赖将无法解析（glib2 打包会失败）" >&2
+        return 1
+    fi
+    echo "=== libffi: 上游 core 缺失，注入本地包 ==="
+    install -Dm644 "$src" "$dst/Makefile"
+}
+
 fix_kconfig_recursive_dependency() {
     local file="$BUILD_DIR/scripts/package-metadata.pl"
     if [ -f "$file" ]; then

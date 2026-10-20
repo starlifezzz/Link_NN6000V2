@@ -38,6 +38,7 @@ main() {
     clone_repo
     clean_up
     reset_feeds_conf
+    fix_libffi_missing
     update_feeds
     fix_miniupnpd_patches
     update_golang
