@@ -47,6 +47,34 @@ enforce_nss_freq_level() {
     return 0
 }
 
+# sysctl 表：每行 "<key> <value>"；__HW__/__RPS__ 由调用方计算后传入。
+# 顺序即应用顺序，改动请保持"基础项 -> extra_pbuf -> 分档项"的既有次序。
+NSS_SYSCTLS_BASE="
+dev.nss.clock.auto_scale 0
+dev.nss.n2hcfg.n2h_queue_limit_core0 2048
+dev.nss.n2hcfg.n2h_queue_limit_core1 2048
+"
+
+NSS_SYSCTLS_TIER="
+dev.nss.n2hcfg.n2h_high_water_core0 __HW__
+dev.nss.rps.hash_bitmap __RPS__
+"
+
+# $1=表内容 $2=__HW__ 值 $3=__RPS__ 值（空则跳过该行）
+apply_sysctl_table() {
+    local tbl="$1" hw_v="$2" rps_v="$3" key val
+    while read -r key val; do
+        [ -n "$key" ] || continue
+        case "$val" in
+            __HW__)  val="$hw_v" ;;
+            __RPS__) [ -n "$rps_v" ] || continue; val="$rps_v" ;;
+        esac
+        sysctl -qw "$key=$val" 2>/dev/null
+    done <<EOF
+$tbl
+EOF
+}
+
 apply_nss_tune() {
     enforce_nss_freq_level
 
@@ -64,12 +92,8 @@ apply_nss_tune() {
         return 0
     }
 
-    # 关闭 NSS 频率 auto_scale（固定频率，降低延迟抖动）
-    sysctl -qw dev.nss.clock.auto_scale=0
-
-    # n2h 队列限制（官方值）
-    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core0=2048
-    sysctl -qw dev.nss.n2hcfg.n2h_queue_limit_core1=2048 2>/dev/null
+    # 基础项：关闭自动调频（固定频率，降低延迟抖动）+ n2h 队列上限（官方值）
+    apply_sysctl_table "$NSS_SYSCTLS_BASE" "" ""
 
     # 按 MemTotal 分档（对齐官方 apply_pbuf_profile）
     local mem ep hw
@@ -95,13 +119,11 @@ apply_nss_tune() {
         logger -t "$PROG" "extra_pbuf_core0 已分配($cur)，跳过"
     fi
 
-    sysctl -qw "dev.nss.n2hcfg.n2h_high_water_core0=$hw"
-
-    # RPS hash bitmap 分散到全部 CPU（对齐官方 hash_bitmap=(1<<ncpu)-1）
-    local ncpu
+    # 分档项 + RPS hash bitmap（对齐官方 hash_bitmap=(1<<ncpu)-1）
+    local ncpu rps=""
     ncpu=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
-    [ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] && \
-        sysctl -qw "dev.nss.rps.hash_bitmap=$(((1 << ncpu) - 1))"
+    [ -n "$ncpu" ] && [ "$ncpu" -gt 0 ] && rps=$(((1 << ncpu) - 1))
+    apply_sysctl_table "$NSS_SYSCTLS_TIER" "$hw" "$rps"
 
     logger -t "$PROG" "NSS n2h/pbuf 调优完成 (ep=$ep hw=$hw queue=2048)"
 }

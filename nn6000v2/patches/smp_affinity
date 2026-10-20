@@ -10,7 +10,7 @@ PROG=smp_affinity
 
 log_msg() {
 
-    local irq_name="$1" affinity="$2" irq="$3"
+    local irq_name="$1" affinity="$2" irq="$3" msg
 
     msg="$(printf "Pinning IRQ($irq) %-24s to CPU ${affinity}\n" "$irq_name")"
 
@@ -93,81 +93,104 @@ detect_wifi() {
     return 1
 }
 
+######################################################################
+# 中断分配表（数据驱动）：每行 "<IRQ 名> <目标 CPU> [第几次出现]"
+#   CPU 写法见 cpus_to_bitmask: 单核 3 / 区间 0-3 / 列表 0,1
+# 改策略只改表，不再散落在 if 分支里；顺序即绑定顺序（影响仅日志顺序）。
+######################################################################
+affinity_profile() {
+    case "$1" in
+    2core)          # 双核：以太网/NSS 集中 CPU0
+        cat <<'EOF'
+edma_txcmpl 0 1
+edma_rxfill 0 1
+edma_rxdesc 0 1
+edma_misc 0 1
+nss_queue0 0-1 1
+bam_dma 0 1
+EOF
+        ;;
+    2core_wifi)     # 双核 + WiFi：WiFi 环 0/1 分载
+        cat <<'EOF'
+reo2host-destination-ring1 0 1
+reo2host-destination-ring2 0 1
+reo2host-destination-ring3 1 1
+reo2host-destination-ring4 1 1
+wbm2host-tx-completions-ring1 0 1
+wbm2host-tx-completions-ring2 1 1
+wbm2host-tx-completions-ring3 1 1
+EOF
+        ;;
+    4core_wifi)     # 四核 + WiFi：WiFi 占 0-3，以太网让到 CPU3，NSS 用 2-3
+        cat <<'EOF'
+reo2host-destination-ring1 0 1
+reo2host-destination-ring2 1 1
+reo2host-destination-ring3 2 1
+reo2host-destination-ring4 3 1
+wbm2host-tx-completions-ring1 1 1
+wbm2host-tx-completions-ring2 2 1
+wbm2host-tx-completions-ring3 3 1
+ppdu-end-interrupts-mac1 1 1
+ppdu-end-interrupts-mac2 2 1
+ppdu-end-interrupts-mac3 3 1
+edma_txcmpl 3 1
+edma_rxfill 3 1
+edma_rxdesc 3 1
+edma_misc 3 1
+nss_queue0 2-3 1
+EOF
+        ;;
+    4core_nowifi)   # 四核纯有线：全部打散，最大化吞吐
+        cat <<'EOF'
+edma_txcmpl 0-1 1
+edma_rxfill 3 1
+edma_rxdesc 2 1
+edma_misc 2-3 1
+nss_queue0 0-3 1
+EOF
+        ;;
+    esac
+}
+
+apply_profile() {
+    local p
+    for p in $1; do
+        affinity_profile "$p" | while read -r irq_name cpu occ; do
+            [ -n "$irq_name" ] || continue
+            set_affinity "$irq_name" "$cpu" "${occ:-1}"
+        done
+    done
+}
+
 enable_affinity() {
-    # 检测 CPU 核心数
-    local cpu_count
+    local cpu_count has_wifi=0 profile
     cpu_count=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 4)
-    
-    local has_wifi=0
-    detect_wifi && has_wifi=1 || logger -t "$PROG" "未检测到 WiFi 设备，使用纯有线网络优化策略"
+
+    if detect_wifi; then
+        has_wifi=1
+    else
+        logger -t "$PROG" "未检测到 WiFi 设备，使用纯有线网络优化策略"
+    fi
 
     if [ "$cpu_count" -lt 4 ]; then
-        # ---- 双核优化 ----
         logger -t "$PROG" "检测到 $cpu_count 核心 CPU，使用简化中断分配策略"
-
-        # 以太网集中到 CPU0
-        set_affinity 'edma_txcmpl' 0 1
-        set_affinity 'edma_rxfill' 0 1
-        set_affinity 'edma_rxdesc' 0 1
-        set_affinity 'edma_misc' 0 1
-
-        # NSS 硬件加速分配到 CPU0-1（VIKINGYFY 分支含 qca-nss-drv，IRQ 有效）
-        set_affinity 'nss_queue0' 0-1 1
-        set_affinity 'bam_dma' 0 1
-
-        if [ "$has_wifi" -eq 1 ]; then
-            set_affinity 'reo2host-destination-ring1' 0 1
-            set_affinity 'reo2host-destination-ring2' 0 1
-            set_affinity 'reo2host-destination-ring3' 1 1
-            set_affinity 'reo2host-destination-ring4' 1 1
-            set_affinity 'wbm2host-tx-completions-ring1' 0 1
-            set_affinity 'wbm2host-tx-completions-ring2' 1 1
-            set_affinity 'wbm2host-tx-completions-ring3' 1 1
-        fi
+        profile=2core
+        [ "$has_wifi" -eq 1 ] && profile="2core 2core_wifi"
     else
-        # ---- 四核优化 ----
         logger -t "$PROG" "检测到 $cpu_count 核心 CPU"
-
         if [ "$has_wifi" -eq 1 ]; then
-            # 有 WiFi：WiFi + 网络混合调度，避免干扰
             logger -t "$PROG" "使用 WiFi+有线混合中断分配策略"
-
-            set_affinity 'reo2host-destination-ring1' 0 1
-            set_affinity 'reo2host-destination-ring2' 1 1
-            set_affinity 'reo2host-destination-ring3' 2 1
-            set_affinity 'reo2host-destination-ring4' 3 1
-
-            set_affinity 'wbm2host-tx-completions-ring1' 1 1
-            set_affinity 'wbm2host-tx-completions-ring2' 2 1
-            set_affinity 'wbm2host-tx-completions-ring3' 3 1
-
-            set_affinity 'ppdu-end-interrupts-mac1' 1 1
-            set_affinity 'ppdu-end-interrupts-mac2' 2 1
-            set_affinity 'ppdu-end-interrupts-mac3' 3 1
-
-            # 以太网集中到 CPU3（避免干扰 WiFi 所在的 0-2 核）
-            set_affinity 'edma_txcmpl' 3 1
-            set_affinity 'edma_rxfill' 3 1
-            set_affinity 'edma_rxdesc' 3 1
-            set_affinity 'edma_misc' 3 1
-
-            # NSS 中断绑定 CPU2-3（与 WiFi 的 0-1 隔离）
-            set_affinity 'nss_queue0' 2-3 1
+            profile=4core_wifi
         else
-            # 无 WiFi：所有中断均匀分散，最大化吞吐
             logger -t "$PROG" "使用纯有线性能优化中断分配策略"
-
-            # 以太网分散到所有 4 核
-            set_affinity 'edma_txcmpl' 0-1 1
-            set_affinity 'edma_rxfill' 3 1
-            set_affinity 'edma_rxdesc' 2 1
-            set_affinity 'edma_misc' 2-3 1
-
-            # NSS 中断分散到全部核心（无 WiFi 场景，最大化吞吐）
-            set_affinity 'nss_queue0' 0-3 1
+            profile=4core_nowifi
         fi
+    fi
 
-        # BAM DMA 分散到 CPU1-3（VIKINGYFY 分支含 NSS BAM DMA IRQ）
+    apply_profile "$profile"
+
+    # 4 核场景 BAM DMA 有 3 个队列，需分别钉核（occurrence 2/3），表里放不下
+    if [ "$cpu_count" -ge 4 ]; then
         set_affinity 'bam_dma' 1 1
         set_affinity 'bam_dma' 2 2
         set_affinity 'bam_dma' 3 3
