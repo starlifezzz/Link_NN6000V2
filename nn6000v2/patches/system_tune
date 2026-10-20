@@ -28,14 +28,17 @@ START=19
 
 PROG=system_tune
 
+# 需要 errors=remount-ro 的挂载点（表驱动：uci 选项修正与 live remount 共用一份）
+EXT4_TARGETS="/overlay /mnt/data_sda2"
+
 apply() {
     local fstab_changed=0 sec target opts m
 
     # 1) ext4 挂载加 errors=remount-ro
     for sec in $(uci show fstab 2>/dev/null | sed -n 's/^fstab\.\(.*\)=mount$/\1/p'); do
         target=$(uci -q get "fstab.$sec.target")
-        case "$target" in
-            /overlay|/mnt/data_sda2)
+        case " $EXT4_TARGETS " in
+            *" $target "*)
                 opts=$(uci -q get "fstab.$sec.options")
                 case ",${opts}," in
                     *,errors=remount-ro,*) ;;
@@ -56,7 +59,7 @@ apply() {
 
     # 校验 /proc/mounts，如尚未生效则立即 remount（每次开机执行；
     # /overlay 非 fstab 管理（preinit 挂载），只能靠本段 live remount）
-    for m in /overlay /mnt/data_sda2; do
+    for m in $EXT4_TARGETS; do
         mountpoint -q "$m" 2>/dev/null || continue
         grep " $m " /proc/mounts | grep -q "errors=remount-ro" && continue
         mount -o remount,errors=remount-ro "$m" 2>/dev/null && \
@@ -93,6 +96,17 @@ apply() {
         if pidof uhttpd >/dev/null 2>&1; then
             /etc/init.d/uhttpd restart 2>/dev/null
         fi
+    fi
+
+    # 4) 禁用 uhttpd 自启动（2026-10-20 由一次性 uci-defaults 996 固化到此）
+    #    原 996 只执行一次，被备份还原/白化后失效；本段每次开机幂等。
+    #    START=19 < uhttpd 的 S50，先于其启动执行。
+    if [ -x /etc/init.d/uhttpd ]; then
+        for l in /etc/rc.d/S*uhttpd; do
+            [ -e "$l" ] || continue
+            /etc/init.d/uhttpd disable >/dev/null 2>&1 && \
+                logger -t "$PROG" "uhttpd autostart disabled"
+        done
     fi
 
     return 0

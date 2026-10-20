@@ -1,0 +1,3 @@
+location ~* ^/android-icon-.*\.png$ {
+    return 204;
+}

@@ -41,7 +41,7 @@
 #
 # DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
 #
-# 时序: START=01 —— 必须早于所有被托管脚本（10/11/18/19/20/29/93）。
+# 时序: START=01 —— 必须早于所有被托管脚本（11/18/19/29/93）。
 # 注意: 本脚本随新固件刷入后才生效；对当前旧固件设备执行也安全
 #       （首次无记录时非白化副本一律让 rom 生效；白化则保留不动）。
 ######################################################################
@@ -56,20 +56,38 @@ MANAGED_FILES="
 /etc/init.d/nss_tune
 /etc/init.d/fix_firewall_harden
 /etc/init.d/system_tune
-/etc/init.d/fix_luci_ucode
 /etc/init.d/fix_luci_rpcd
-/etc/init.d/fix_istorex
 /etc/init.d/smp_affinity
 /etc/init.d/fix_overlay_shadow
 /etc/init.d/emmc_health
 /usr/bin/luci_diag
 /usr/bin/nss_diag.sh
 /sbin/cpuusage
+/sbin/cpuinfo
+/usr/lib/lua/luci/controller/istore_backend.lua
+/usr/share/rpcd/ucode/luci
+/usr/share/ucode/luci/sys.uc
+/usr/share/ucode/luci/version.uc
+/usr/share/ucode/luci/zoneinfo.uc
+/usr/lib/ucode/luci/core.so
+/usr/share/ucode/luci/template/header.ut
+/usr/share/ucode/luci/template/themes/argon/header.ut
+/usr/share/ucode/luci/template/themes/argon/footer.ut
+/usr/share/ucode/luci/template/themes/argon/header_login.ut
+/usr/share/ucode/luci/template/themes/argon/footer_login.ut
 /etc/sysctl.d/zz-custom.conf
 /etc/uci-defaults/990_set_argon_primary
 /etc/uci-defaults/991_custom_settings
 /etc/uci-defaults/992_network_config.sh
 /etc/uci-defaults/994_set_opkg_repos
+"
+
+# 已从镜像移除的旧文件（2026-10-20 P1/P2 固化）：
+# overlay 若还残留副本或白化，开机清掉 —— 否则备份还原带回的旧脚本
+# 会继续执行旧逻辑（旧 fix_luci_ucode 用 cp 覆盖，与新 rom 内容打架）。
+LEGACY_FILES="
+/etc/init.d/fix_luci_ucode
+/etc/init.d/fix_istorex
 /etc/uci-defaults/996_fix_luci_homepage
 /etc/uci-defaults/997_install_nginx_icons
 /etc/uci-defaults/998_set_nss_freq
@@ -119,6 +137,23 @@ md5_of() {
     md5sum "$1" 2>/dev/null | awk '{print $1}'
 }
 
+# 清理已下线文件的 overlay 残留（副本或白化）。
+# 只处理 /rom 中已不存在的路径，避免误删仍随固件提供的文件。
+prune_legacy() {
+    local f upper
+    for f in $LEGACY_FILES; do
+        upper="/overlay/upper$f"
+        [ -e "$upper" ] || continue
+        [ -e "/rom$f" ] && continue
+        if [ -n "$DRYRUN" ]; then
+            log "DRYRUN: would prune legacy overlay entry: $f"
+        else
+            rm -f "$upper"
+            log "pruned legacy overlay entry: $f"
+        fi
+    done
+}
+
 sync_managed() {
     local f upper rmd5 rec
     [ -d /rom ] || return 0
@@ -135,14 +170,22 @@ sync_managed() {
         # overlay"白化"（删除标记＝字符设备 0,0）
         if [ -c "$upper" ]; then
             if [ -z "$rec" ]; then
-                state_set "$f" "$rmd5"
-                log "whiteout first seen, keep: $f"
+                if [ -n "$DRYRUN" ]; then
+                    log "DRYRUN: would record whiteout: $f"
+                else
+                    state_set "$f" "$rmd5"
+                    log "whiteout first seen, keep: $f"
+                fi
             elif [ "$rec" = "$rmd5" ]; then
                 log "whiteout up-to-date, keep: $f"
             else
-                rm -f "$upper"
-                state_set "$f" "$rmd5"
-                log "removed whiteout: $f (rom updated, uci-default re-runs)"
+                if [ -n "$DRYRUN" ]; then
+                    log "DRYRUN: would remove whiteout: $f (rom updated)"
+                else
+                    rm -f "$upper"
+                    state_set "$f" "$rmd5"
+                    log "removed whiteout: $f (rom updated, uci-default re-runs)"
+                fi
             fi
             continue
         fi
@@ -150,8 +193,12 @@ sync_managed() {
         if cmp -s "$upper" "/rom$f"; then
             continue
         fi
-        rm -f "$upper"
-        log "removed stale overlay copy: $f (content != rom, rom wins)"
+        if [ -n "$DRYRUN" ]; then
+            log "DRYRUN: would remove stale overlay copy: $f (content != rom)"
+        else
+            rm -f "$upper"
+            log "removed stale overlay copy: $f (content != rom, rom wins)"
+        fi
     done
 }
 
@@ -485,6 +532,7 @@ sync_apk_world() {
 }
 
 apply() {
+    prune_legacy
     sync_managed
     sync_apk_db
     sync_apk_world

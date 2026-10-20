@@ -56,7 +56,6 @@ main() {
     fix_uwsgi_start_priority
     update_default_lan_addr
     update_affinity_script
-    install_luci_ucode_fix
     install_luci_rpcd_fix
     install_istorex_fixes
     fix_nn6000_gpio_conflict

@@ -18,12 +18,13 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/991_custom_settings" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/991_custom_settings"
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
     install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
-    # 996_fix_luci_homepage 已废弃：uwsgi START 改为 93（quickstart S92 之后），
-    # 路由缓存竞态从源头解决，不再需要每次启动清缓存+重启 uwsgi。
-    install -Dm544 "$BASE_PATH/patches/996_fix_luci_homepage" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/996_fix_luci_homepage"
-    install -Dm544 "$BASE_PATH/patches/997_install_nginx_icons" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/997_install_nginx_icons"
-    # 998/999: 保留（NSS 频率设置 + 防火墙加固）
-    install -Dm544 "$BASE_PATH/patches/998_set_nss_freq" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/998_set_nss_freq"
+    # 996/997/998 已固化为构建期产物（2026-10-20）：
+    #   - wwan.js stub、quickstart_icons.location 直接写入 rootfs（静态文件，
+    #     不再由首启脚本生成；/rom 中确认无同名文件，不会被包覆盖）
+    #   - uhttpd 自启禁用移入 system_tune（每次开机幂等，抗备份还原）
+    #   - nss_freq high 由 nss_tune 运行期强制（998 删除，避免一次性脚本被白化）
+    install -Dm644 "$BASE_PATH/patches/wwan.js" "$BUILD_DIR/package/base-files/files/www/luci-static/resources/protocol/wwan.js"
+    install -Dm644 "$BASE_PATH/patches/quickstart_icons.location" "$BUILD_DIR/package/base-files/files/etc/nginx/conf.d/quickstart_icons.location"
     # 999_harden_firewall 已移除：与 fix_firewall_harden (init.d, START=18) 完全重复，
     # fix_firewall_harden 每次开机检查并恢复加固状态，已覆盖对抗备份还原场景。
     # LuCI 登录故障诊断脚本（刷机后 SSH 执行: luci_diag）
@@ -106,20 +107,13 @@ update_affinity_script() {
     fi
 }
 
-# 修复 istore 全量备份还原后旧版 luci ucode 文件遮蔽 /rom 新版导致的
-# luci RPC object 未注册（前端 -32000 Object not found、系统信息变 ?）。
-# 每次开机（START=10，早于 rpcd START=12）用 /rom 固件自带版本覆盖。
-install_luci_ucode_fix() {
-    local target_dir="$BUILD_DIR/target/linux/qualcommax"
-
-    if [ -d "$target_dir" ]; then
-        install -Dm755 "$BASE_PATH/patches/fix_luci_ucode" "$target_dir/base-files/etc/init.d/fix_luci_ucode"
-        echo "已安装 fix_luci_ucode 启动修复脚本 (luci ucode 版本自愈)"
-    fi
-}
+# 说明（2026-10-20 P2）：原 fix_luci_ucode 运行期脚本已删除。
+# luci ucode 核心文件改为登记到 fix_overlay_shadow 的 MANAGED_FILES，
+# 由「rom 内容优先」的统一机制处理（内容不同即删除 overlay 副本），
+# 语义与原先 cp 覆盖等价，但少一个启动脚本且能自动覆盖新增文件。
 
 # 部署 uhttpd 适配器（nginx→uhttpd 密码哈希桥接）+ rpcd 空密码哈希初始化。
-# START=11，在 fix_luci_ucode (START=10) 之后运行。
+# START=11（luci ucode 已改由 fix_overlay_shadow 在 S01 统一处理）。
 # 解决: set_new_pwd/check_oldpwd 依赖 uhttpd -m 生成 crypt hash，
 #       但固件用 nginx 导致密码修改失败（复杂密码返回空哈希）。
 install_luci_rpcd_fix() {
@@ -137,12 +131,10 @@ install_luci_rpcd_fix() {
 #  2) quickstart 的 AutocoreTemperature 依赖 /sbin/cpuinfo 输出含 "xx.x°C"，
 #     但 ImmortalWrt/VIKINGYFY 的 autocore 把温度分离在 /sbin/tempinfo，
 #     导致温度恒为 0（接口返回 {"result":{}}）。
-# 均以 patches/ 下的修复版覆盖；另装 fix_istorex 运行期自愈（对抗备份还原）。
+# 均以 patches/ 下的修复版写入 /rom；运行期由 fix_overlay_shadow 统一守护。
 # 移除条件: kenzok8 feed 的 luci-app-quickstart 原生提供 /linkease/api 路由，
 #           且其配套 autocore cpuinfo 输出自带温度后，可删除本函数与相关 patches。
 install_istorex_fixes() {
-    local target_dir="$BUILD_DIR/target/linux/qualcommax"
-
     # 1. autocore cpuinfo：追加 CPU 温度（供 quickstart AutocoreTemperature 解析）
     local cpuinfo="$BUILD_DIR/package/emortal/autocore/files/cpuinfo"
     if [ -f "$cpuinfo" ] && [ -f "$BASE_PATH/patches/cpuinfo" ]; then
@@ -161,12 +153,9 @@ install_istorex_fixes() {
         echo "警告: 未找到 luci-app-quickstart 的 istore_backend.lua，跳过路由修复"
     fi
 
-    # 3. 运行期自愈脚本（每次开机用 /rom 修复版覆盖被备份还原遮蔽的文件）
-    if [ -d "$target_dir" ]; then
-        install -Dm755 "$BASE_PATH/patches/fix_istorex" \
-            "$target_dir/base-files/etc/init.d/fix_istorex"
-        echo "已安装 fix_istorex 运行期自愈脚本 (istorex 温度/路由自愈)"
-    fi
+    # 3.（2026-10-20 P2）原 fix_istorex 运行期自愈脚本已删除：
+    #     /sbin/cpuinfo 与 istore_backend.lua 已登记到 fix_overlay_shadow 的
+    #     MANAGED_FILES，由统一的「rom 内容优先」机制保证不被旧副本遮蔽。
 }
 
 # 修复 NN6000 的 WPS/reset 按键失效（gpio-keys probe -EINVAL）:
