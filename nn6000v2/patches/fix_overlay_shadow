@@ -76,6 +76,8 @@ MANAGED_FILES="
 /usr/share/ucode/luci/template/themes/argon/header_login.ut
 /usr/share/ucode/luci/template/themes/argon/footer_login.ut
 /etc/sysctl.d/zz-custom.conf
+/etc/nginx/conf.d/quickstart_icons.locations
+/www/luci-static/resources/protocol/wwan.js
 /etc/uci-defaults/990_set_argon_primary
 /etc/uci-defaults/991_custom_settings
 /etc/uci-defaults/992_network_config.sh
@@ -91,6 +93,7 @@ LEGACY_FILES="
 /etc/uci-defaults/996_fix_luci_homepage
 /etc/uci-defaults/997_install_nginx_icons
 /etc/uci-defaults/998_set_nss_freq
+/etc/nginx/conf.d/quickstart_icons.location
 "
 
 log() {

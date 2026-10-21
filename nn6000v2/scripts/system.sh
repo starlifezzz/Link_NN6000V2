@@ -19,12 +19,14 @@ fix_default_set() {
     install -Dm544 "$BASE_PATH/patches/992_network_config.sh" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/992_network_config.sh"
     install -Dm544 "$BASE_PATH/patches/994_set_opkg_repos" "$BUILD_DIR/package/base-files/files/etc/uci-defaults/994_set_opkg_repos"
     # 996/997/998 已固化为构建期产物（2026-10-20）：
-    #   - wwan.js stub、quickstart_icons.location 直接写入 rootfs（静态文件，
+    #   - wwan.js stub、quickstart_icons.locations 直接写入 rootfs（静态文件，
     #     不再由首启脚本生成；/rom 中确认无同名文件，不会被包覆盖）
+    #     注意后缀必须是 .locations（复数）：/etc/config/nginx 的 include 是
+    #     conf.d/*.locations，单数文件通配不中、从未被加载（2026-10-20 设备实测）
     #   - uhttpd 自启禁用移入 system_tune（每次开机幂等，抗备份还原）
     #   - nss_freq high 由 nss_tune 运行期强制（998 删除，避免一次性脚本被白化）
     install -Dm644 "$BASE_PATH/patches/wwan.js" "$BUILD_DIR/package/base-files/files/www/luci-static/resources/protocol/wwan.js"
-    install -Dm644 "$BASE_PATH/patches/quickstart_icons.location" "$BUILD_DIR/package/base-files/files/etc/nginx/conf.d/quickstart_icons.location"
+    install -Dm644 "$BASE_PATH/patches/quickstart_icons.locations" "$BUILD_DIR/package/base-files/files/etc/nginx/conf.d/quickstart_icons.locations"
     # 999_harden_firewall 已移除：与 fix_firewall_harden (init.d, START=18) 完全重复，
     # fix_firewall_harden 每次开机检查并恢复加固状态，已覆盖对抗备份还原场景。
     # LuCI 登录故障诊断脚本（刷机后 SSH 执行: luci_diag）
@@ -552,9 +554,10 @@ set_nginx_default_config() {
         echo "错误: 未找到 $nginx_uci 或 patches/nginx.config，M2 监听收紧未进镜像" >&2
     fi
 
-    # quickstart_icons.location：通过 uci-defaults 997 安装到 /etc/nginx/conf.d/
-    # 构建期 base-files/files/ 不适合安装 nginx conf.d 文件（squashfs 打包时
-    # 目录可能不存在或被 nginx-mod-luci 覆盖），uci-defaults 写 overlay 更可靠
+    # quickstart_icons.locations 已改为构建期静态安装（见 fix_default_set）：
+    #   文件名后缀须为 .locations（复数），与 /etc/config/nginx 的
+    #   conf.d/*.locations 通配一致；旧 997 用的单数 .location 从不匹配、无效。
+    #   overlay 残留的旧单数文件由 fix_overlay_shadow 的 LEGACY_FILES 清理。
 
     local nginx_template="$BUILD_DIR/feeds/packages/net/nginx-util/files/uci.conf.template"
     if [ -f "$nginx_template" ]; then
