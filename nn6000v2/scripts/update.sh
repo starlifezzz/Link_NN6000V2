@@ -50,6 +50,7 @@ main() {
     install_feeds
     fix_smartdns_makefile
     remove_tweaked_packages
+    dedupe_feed_packages
     change_dnsmasq2full
     fix_default_set
     fix_mk_def_depends

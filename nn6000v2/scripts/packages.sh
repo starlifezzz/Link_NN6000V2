@@ -105,6 +105,10 @@ clone_packages() {
 }
 
 install_openwrt_packages() {
+    # 注: 清单条目并非都来自 kenzok8 GitHub —— luci-app-quickfile / luci-app-lucky /
+    #   luci-app-easytier / luci-app-tailscale-community 分别由 clone_quickfile / clone_lucky /
+    #   clone_easytier / clone_luci_tailscale 克隆上游钉版（PIN_* 变量，@2026-10-11）注入
+    #   feeds/openwrt_packages；在 kenzok8 GitHub 上探到 404 属正常，勿据此删条目。
     ./scripts/feeds install -p openwrt_packages -f \
         taskd luci-lib-xterm luci-lib-taskd \
         luci-app-store quickstart luci-app-quickstart luci-app-istorex \

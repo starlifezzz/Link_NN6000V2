@@ -591,6 +591,67 @@ update_uwsgi_limit_as() {
     fi
 }
 
+# 构建期去重「显式清单（kenzok8 / 克隆钉版）」与「luci、packages feed 全量注册」的同名包
+# （2026-10-20 CI 连挂修复）。
+#
+# 为什么必须去重: install_feeds 对非 openwrt_packages 的每个 feed 执行
+#   `feeds install -f -ap`（全量注册），与 install_openwrt_packages 的显式条目撞名时，
+#   「哪个 .apk 被编译」与「哪个 Kconfig 定义生效」由目录扫描顺序决定、结果不稳定。
+#   实测翻转证据（同一仓库不同次构建）：
+#     luci-app-smartdns  设备(10-15 构建)=kenzok8 1.2024.45-r1
+#                        最近 CI(10-20)=immortalwrt/luci 1.2025.47.2-r1
+#   撞名清单（2026-10-20 全量扫描 4 个 feed × 显式清单 19 名，仅这 4 项）：
+#     luci-theme-argon          kenzok8 3.0.0-r20261016（设备在用） vs luci 3.0.0-r20261019
+#     luci-app-smartdns         kenzok8 1.2024.45（设备在用） vs luci 1.2025.47.2
+#     smartdns                  kenzok8 48.4-r2（设备在用） vs immortalwrt/packages net/smartdns 48.4-r1
+#     luci-app-tailscale-community  Tokisaki 克隆钉版 d9a3954（=其 master HEAD）vs luci feed
+#
+# smartdns 额外风险: fix_smartdns_makefile 只优先 patch feeds/openwrt_packages/smartdns；
+#   若 packages feed 侧胜出，Rust UI 剥离补丁作用不到真正被编译的 Makefile。
+# tailscale-community 注意: 它在 kenzok8 GitHub 上没有（404 属正常），由
+#   clone_luci_tailscale 克隆 Tokisaki-Galaxy 钉版注入 feeds/openwrt_packages，
+#   显式清单装的就是钉版 —— 显式条目不是死条目，勿删。
+#
+# luci-app-argon-config 一并纳入（护栏）: 上游已于 2026-10-19 把该 app 合入主题
+#   （immortalwrt/luci themes/luci-theme-argon: PKG_VERSION3.0.0 PKG_RELEASE20261019
+#   LUCI_BASENAME:=argon-config PKG_PROVIDES:=luci-app-argon-config，原
+#   applications/luci-app-argon-config 已 404）；但本仓库的 .config 已禁用该 app，
+#   一旦 feed 回退、旧 app 复活，其生成的 luci-i18n-argon-config-<lang> 依赖裸名
+#   → package-metadata.pl:161+228-237 转成 `depends on PACKAGE_luci-app-argon-config`
+#   → apk 报 "luci-app-argon-config (no such package)"（2026-10-20 CI 实录）。
+#
+# 护栏: 仅当显式清单侧（kenzok8/克隆钉版）确有注册时才删 luci、packages 侧
+#       （避免删完没有提供方）；
+#       luci-app-argon-config 无显式清单提供也照删（上游已 PROVIDES 接管，
+#       且我们本就不装该 app）。
+# 时序: 必须在 install_feeds 之后调用，否则 symlink 会被重建。
+# 移除条件: 上述 4 包在各 feed 不再撞名时本函数自动为空操作，可整段删除。
+dedupe_feed_packages() {
+    local name feed src dst
+    for name in luci-theme-argon luci-app-smartdns smartdns luci-app-tailscale-community; do
+        dst="$BUILD_DIR/package/feeds/openwrt_packages/$name"
+        for feed in luci packages; do
+            src="$BUILD_DIR/package/feeds/$feed/$name"
+            if [ ! -e "$src" ] && [ ! -L "$src" ]; then
+                continue
+            fi
+            if [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
+                echo "dedupe: 跳过 $name（kenzok8 侧未注册，保留 $feed 侧以免无提供方）" >&2
+                continue
+            fi
+            rm -rf "$src"
+            echo "dedupe: 已移除 $feed feed 的 $name（改用显式清单/钉版）"
+        done
+    done
+
+    # 护栏项: 与 kenzok8 是否提供无关，只要出现就删
+    local argon_app="$BUILD_DIR/package/feeds/luci/luci-app-argon-config"
+    if [ -e "$argon_app" ] || [ -L "$argon_app" ]; then
+        rm -rf "$argon_app"
+        echo "dedupe: 已移除 luci feed 的 luci-app-argon-config（argon-config 已由主题内置/PKG_PROVIDES）"
+    fi
+}
+
 remove_tweaked_packages() {
     local target_mk="$BUILD_DIR/include/target.mk"
     if [ -f "$target_mk" ]; then
