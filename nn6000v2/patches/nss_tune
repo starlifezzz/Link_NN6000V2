@@ -118,6 +118,10 @@ apply_nss_tune() {
     else
         logger -t "$PROG" "extra_pbuf_core0 已分配($cur)，跳过"
     fi
+    # 注: 写入值 ≠ sysctl 读回值属正常 —— 驱动按请求向上取整后实际分配。
+    #   2026-10-21 真机: 本脚本写 10000000 → 内核日志
+    #   "qca-nss ... Additional pbufs of size 10002432 got added to NSS"
+    #   → sysctl 读回 10002432（+0.02%）。体检勿把该差值当配置漂移。
 
     # 分档项 + RPS hash bitmap（对齐官方 hash_bitmap=(1<<ncpu)-1）
     local ncpu rps=""

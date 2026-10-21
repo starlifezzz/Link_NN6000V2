@@ -299,7 +299,15 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-ipq6018-ddwrt=n/' \
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074=n/' \
         -e 's/^CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=y$/CONFIG_PACKAGE_ath11k-firmware-qcn9074-ddwrt=n/' \
+        -e 's|^CONFIG_TARGET_DEVICE_PACKAGES_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=.*|CONFIG_TARGET_DEVICE_PACKAGES_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=""|' \
         "$CONFIG_FILE" > .config
+
+    # 上面最后一行: 板级 BDF（ipq-wifi-link_nn6000 → /lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin）
+    # 挂在 DEVICE_PACKAGES 字符串里，不是 CONFIG_PACKAGE_*=y 行 —— 只翻 =n 的 sed 摸不到它。
+    # 2026-10-21 真机证据: nowifi 镜像含 board-2.bin 但 apk 无归属包
+    # （apk info --who-owns 报 Could not find owner；ath11k 驱动/固件包均已剔除）。
+    # BDF 只供 ath11k 带 WiFi 时加载，nowifi 无驱动 → 纯死重，置空即除。
+    # （自检见 make defconfig 之后 —— 要验最终 .config，防 Kconfig 默认值回填。）
 
     # 关键: wpad-openssl / kmod-ath11k* 位于 qualcommax/Makefile 的
     # DEFAULT_PACKAGES（第 14-16 行），而 DEFAULT_PACKAGES 优先级高于 .config
@@ -324,7 +332,12 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     make defconfig
     restrict_to_link_nn6000
     make defconfig
-    
+    # 自检（失败路径已验: 注入 ipq-wifi 值必须告警）: 最终 .config 若仍含 ipq-wifi ——
+    # sed 符号名失配（上游改名）或 Kconfig 把 DEVICE_PACKAGES 默认值回填，BDF 会再次进镜像。
+    if grep -q '^CONFIG_TARGET_DEVICE_PACKAGES_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=".*ipq-wifi' .config; then
+        echo "⚠ nowifi: DEVICE_PACKAGES 仍含 ipq-wifi，BDF(board-2.bin) 将进入镜像（核对 build.sh 的 sed 符号名）" >&2
+    fi
+
     echo "编译无 WiFi 版本..."
     make -j$(($(nproc) + 1)) || make -j1 V=s
 

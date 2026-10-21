@@ -97,15 +97,13 @@ detect_wifi() {
 # 中断分配表（数据驱动）：每行 "<IRQ 名> <目标 CPU> [第几次出现]"
 #   CPU 写法见 cpus_to_bitmask: 单核 3 / 区间 0-3 / 列表 0,1
 # 改策略只改表，不再散落在 if 分支里；顺序即绑定顺序（影响仅日志顺序）。
+# 2026-10-21 真机: IPQ6018 /proc/interrupts 无 edma_* 中断（以太网为
+#   bam_dma + nss_queue*），原表中 edma_* 行均为不匹配的空操作，已移除。
 ######################################################################
 affinity_profile() {
     case "$1" in
     2core)          # 双核：以太网/NSS 集中 CPU0
         cat <<'EOF'
-edma_txcmpl 0 1
-edma_rxfill 0 1
-edma_rxdesc 0 1
-edma_misc 0 1
 nss_queue0 0-1 1
 bam_dma 0 1
 EOF
@@ -133,19 +131,11 @@ wbm2host-tx-completions-ring3 3 1
 ppdu-end-interrupts-mac1 1 1
 ppdu-end-interrupts-mac2 2 1
 ppdu-end-interrupts-mac3 3 1
-edma_txcmpl 3 1
-edma_rxfill 3 1
-edma_rxdesc 3 1
-edma_misc 3 1
 nss_queue0 2-3 1
 EOF
         ;;
     4core_nowifi)   # 四核纯有线：全部打散，最大化吞吐
         cat <<'EOF'
-edma_txcmpl 0-1 1
-edma_rxfill 3 1
-edma_rxdesc 2 1
-edma_misc 2-3 1
 nss_queue0 0-3 1
 EOF
         ;;

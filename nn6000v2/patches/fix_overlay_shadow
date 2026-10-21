@@ -42,6 +42,11 @@
 # DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
 #
 # 时序: START=01 —— 必须早于所有被托管脚本（11/18/19/29/93）。
+#       盲区已知并已补（2026-10-22 设备实测: logd 服务名是 log、START=12，
+#       本脚本 START=01 更早 → 开机阶段 logger 写不进环形缓冲，事后 logread
+#       查无记录）。故每条判定/动作另落盘到 /etc/.fix_overlay_shadow.report
+#       （见 report()），时间前缀用单调 uptime 而非墙钟（早启动钟可偏移数小时）。
+#       健康空跑也写汇总行 —— 有汇总=跑过且无漂移，无文件=没跑。
 # 注意: 本脚本随新固件刷入后才生效；对当前旧固件设备执行也安全
 #       （首次无记录时非白化副本一律让 rom 生效；白化则保留不动）。
 ######################################################################
@@ -96,12 +101,39 @@ LEGACY_FILES="
 /etc/nginx/conf.d/quickstart_icons.location
 "
 
+# 落盘报告（补 logd 盲区，见文件头「时序」）:
+#   START=01 早于 log(START=12)，开机阶段 logger 无效 → 判定/动作写持久文件。
+#   前缀用 /proc/uptime 单调秒: 开机墙钟可大幅偏移（早启动按 UTC/滞后数小时），
+#   墙钟不可作归因依据；开机序反推（uptime 回退=新一次开机）。
+REPORT_FILE="/etc/.fix_overlay_shadow.report"
+ACTIONS=0
+
+report() {
+    local up
+    up=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)
+    # 2>/dev/null 必须写在 >> 之前: 重定向按序执行，否则 /etc 不可写时
+    # 报错会漏到控制台。写失败仅静默跳过（state 文件同样依赖 /etc 可写，
+    # 若其也失败则整体已不可用，不在本函数内扩错）。
+    printf '[+%ss] %s\n' "${up:-?}" "$*" 2>/dev/null >> "$REPORT_FILE" || return 0
+    # 轮转: 超 768 行只留最近 512 —— 报告是诊断线索，防无限膨胀；state 文件不参与
+    local n
+    if [ -f "$REPORT_FILE" ]; then
+        n=$(awk 'END{print NR+0}' "$REPORT_FILE" 2>/dev/null)
+        if [ "${n:-0}" -gt 768 ]; then
+            tail -n 512 "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                mv -f "$REPORT_FILE.tmp" "$REPORT_FILE"
+        fi
+    fi
+}
+
 log() {
     if [ -n "$DRYRUN" ]; then
         echo "[DRYRUN] $*"
     else
         logger -t "$PROG" "$*"
         echo "$*"
+        ACTIONS=$((ACTIONS + 1))
+        report "$*"
     fi
 }
 
@@ -535,6 +567,11 @@ sync_apk_world() {
 }
 
 apply() {
+    if [ -z "$DRYRUN" ]; then
+        # 开机分隔行: rev 取 /rom 版本（实测 /rom/etc/openwrt_version = r0-f9b0ce7），
+        # uptime 回退即新一次开机 —— DRYRUN 不落盘（部署前验证保持零副作用）
+        report "--- start rev=$(cat /rom/etc/openwrt_version 2>/dev/null || echo unknown) ---"
+    fi
     prune_legacy
     sync_managed
     sync_apk_db
@@ -546,6 +583,8 @@ apply() {
         # 新库 524 条）。sync+drop_caches 确保合并视图立即一致。
         sync
         echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+        # 汇总行恒写: actions=0 即健康空跑（与「脚本没跑」可区分——后者无 start 行）
+        report "run done: actions=$ACTIONS (0=无漂移)"
     fi
     return 0
 }
