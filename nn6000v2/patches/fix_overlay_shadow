@@ -38,6 +38,10 @@
 #      overlay world 会残留旧镜像版本钉死（kernel=6.18.44/base-files=1~4b85d5d，
 #      2026-10 实测使 apk add/fix 全部 breaks world 失败），
 #      且 db 重建(B) 不碰 world，必须独立同步。
+#   D) 幻影包（2026-10-22 新增）: 镜像已从 .config 裁掉、但 overlay db/world
+#      记录被 B/C 规则误当"运行期安装包"保留的包（文件实际已全部消失）。
+#      以 stale_scan 幻影判定剔除（fail-safe 与判据见 stale_scan 注释），
+#      否则每开机触发 world 重写 + bak 文件累积（ipq-wifi-link_nn6000 实证）。
 #
 # DRYRUN=1: 只打印将执行的动作，不修改任何文件（部署前验证用）。
 #
@@ -243,13 +247,25 @@ db_kernel_v() {
 }
 
 # 死记录扫描。参数: <rom_db> <upper_db>
-# 输出: 首行 "<overlay独有数> <死记录数>"，其后每行一个死记录包名。
+# 输出: 首行 "<overlay独有数> <剔除总数> <幻影数> <探针ok>"，其后每行一个被剔除包名。
 # 死记录 = overlay 独有包中 D:kernel= 与 rom kernel V: 不匹配者，
 # 以及依赖死记录的 overlay 独有包（依赖闭包，迭代至不动点）。
+# 幻影包 = overlay 独有 + 至少 1 条 F: + **全部** F: 路径在合并视图均不存在。
+#   （2026-10-22 实证: 镜像从 .config 裁掉 ipq-wifi 后，其记录被本脚本"保留
+#     overlay 独有包"规则留存，F: 为 rootfs-overlay/… staging 路径永不存在，
+#     每开机触发 world 重写+bak 累积。）幻影作为依赖闭包的种子，与死记录
+#   同管道剔除（db 与 world 共用本函数，口径天然一致）。
+#   fail-safe: BEGIN 双向探针（/etc 必在 + 已知必缺路径必不在）任一不符 →
+#   整段幻影判定禁用（退回纯 stale 规则）；路径含 $ ` " \ 保守视为存在不剔除；
+#   F: 为空的元包不参与判定。任何不确定 → 不剔除。
 # 2026-10 设备实测最终集合一致性（所有普通依赖可解析、无冲突违反）= 0/0。
 stale_scan() {
     awk '
-        BEGIN { RS="" }
+        BEGIN {
+            RS = ""
+            probe = (system("[ -e /etc ]") == 0) && \
+                    (system("[ -e /etc/.phantom_probe_no_such ]") != 0)
+        }
         function pkg_of(b,   n, a, i) {
             n = split(b, a, "\n")
             for (i = 1; i <= n; i++)
@@ -274,6 +290,13 @@ stale_scan() {
             if ($0 == "") next
             p = pkg_of($0); if (p == "" || p in rom) next
             np++; on[np] = p; od[np] = field_of($0, "D")
+            # 收集 F: 路径（幻影判定用）；fn=条数（0 即元包，不参与判定）
+            nb = split($0, ab, "\n")
+            for (ib = 1; ib <= nb; ib++)
+                if (substr(ab[ib], 1, 2) == "F:") {
+                    fn[np]++
+                    pf[np] = pf[np] substr(ab[ib], 3) "\n"
+                }
         }
         END {
             # 1) kernel 依赖不匹配
@@ -283,6 +306,23 @@ stale_scan() {
                     if (substr(tok[j], 1, 7) == "kernel=" && substr(tok[j], 8) != kv) {
                         drop[on[i]] = 1; break
                     }
+            }
+            # 1.5) 幻影包（探针通过才启用；见文件头 fail-safe 说明）
+            ph = 0
+            if (probe) {
+                for (i = 1; i <= np; i++) {
+                    if (on[i] in drop) continue
+                    if (fn[i] == 0) continue
+                    k = split(pf[i], pa, "\n")
+                    all = 1
+                    for (j = 1; j <= k; j++) {
+                        if (pa[j] == "") continue
+                        # 含 shell 特殊字符的路径保守视为存在（防误判误删）
+                        if (pa[j] ~ /[$`"\\]/) { all = 0; break }
+                        if (system("[ -e \"/" pa[j] "\" ]") == 0) { all = 0; break }
+                    }
+                    if (all) { drop[on[i]] = 1; ph++ }
+                }
             }
             # 2) 依赖闭包（跳过 cmd:/so:/pc: 与 !冲突项；剥版本约束）
             do {
@@ -300,7 +340,7 @@ stale_scan() {
             } while (ch)
             nd = 0
             for (d in drop) nd++
-            printf "%d %d\n", np + 0, nd
+            printf "%d %d %d %d\n", np + 0, nd, ph + 0, probe + 0
             for (d in drop) print d
         }
     ' "$1" "$2"
@@ -364,12 +404,17 @@ sync_apk_db() {
     kv_upper=$(db_kernel_v "$upper_db")
     kv_rom=$(db_kernel_v "$rom_db")
 
-    # 死记录扫描（同时给出 overlay 独有数）
-    local scan n_ov n_drop drop_names
+    # 死记录扫描（同时给出 overlay 独有数；首行第3/4字段=幻影数/探针ok）
+    local scan n_ov n_drop drop_names n_ph probe_ok
     scan=$(stale_scan "$rom_db" "$upper_db")
     n_ov=$(echo "$scan" | head -1 | awk '{print $1}')
     n_drop=$(echo "$scan" | head -1 | awk '{print $2}')
+    n_ph=$(echo "$scan" | head -1 | awk '{print $3+0}')
+    probe_ok=$(echo "$scan" | head -1 | awk '{print $4+0}')
     drop_names=$(echo "$scan" | tail -n +2)
+    if [ "${probe_ok:-1}" -eq 0 ]; then
+        log "phantom probe FAILED (awk system 异常), 本轮跳过幻影剔除，仅按 stale 规则"
+    fi
 
     # rom 基线覆盖检查（新镜像的包 / 版本钉死是否已被 overlay db 覆盖）
     local baseline n_miss n_pin
@@ -385,7 +430,7 @@ sync_apk_db() {
         return 0
     fi
 
-    log "apk db: overlay kernel=$kv_upper rom kernel=$kv_rom stale=$n_drop missing=$n_miss pin_mismatch=$n_pin -> rebuild"
+    log "apk db: overlay kernel=$kv_upper rom kernel=$kv_rom stale+phantom=$n_drop (phantom=$n_ph) missing=$n_miss pin_mismatch=$n_pin -> rebuild"
 
     local n_rom n_upper n_keep
     n_rom=$(grep -c '^P:' "$rom_db")
@@ -396,8 +441,8 @@ sync_apk_db() {
     # 文件以 \n\n 结尾；因此必须按空行分段（RS=""）整块处理 —— 以 P: 为块首
     # 的旧实现会把 C: 行错位（计数翻倍/丢 C:/孤儿 C: 块），DRYRUN 实测已证伪。
     if [ -n "$DRYRUN" ]; then
-        log "DRYRUN: would rebuild db = rom($n_rom) + keep($n_keep = overlay-only $n_ov - stale $n_drop), backup of $n_upper-pkg db (missing=$n_miss pin_mismatch=$n_pin)"
-        [ -n "$drop_names" ] && log "DRYRUN: would drop stale: $(echo $drop_names)"
+        log "DRYRUN: would rebuild db = rom($n_rom) + keep($n_keep = overlay-only $n_ov - drop $n_drop [phantom $n_ph]), backup of $n_upper-pkg db (missing=$n_miss pin_mismatch=$n_pin)"
+        [ -n "$drop_names" ] && log "DRYRUN: would drop stale/phantom: $(echo $drop_names)"
         return 0
     fi
 
