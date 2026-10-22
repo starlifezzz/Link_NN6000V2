@@ -302,12 +302,13 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         -e 's|^CONFIG_TARGET_DEVICE_PACKAGES_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=.*|CONFIG_TARGET_DEVICE_PACKAGES_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=""|' \
         "$CONFIG_FILE" > .config
 
-    # 上面最后一行: 板级 BDF（ipq-wifi-link_nn6000 → /lib/firmware/ath11k/IPQ6018/hw1.0/board-2.bin）
-    # 挂在 DEVICE_PACKAGES 字符串里，不是 CONFIG_PACKAGE_*=y 行 —— 只翻 =n 的 sed 摸不到它。
-    # 2026-10-21 真机证据: nowifi 镜像含 board-2.bin 但 apk 无归属包
-    # （apk info --who-owns 报 Could not find owner；ath11k 驱动/固件包均已剔除）。
-    # BDF 只供 ath11k 带 WiFi 时加载，nowifi 无驱动 → 纯死重，置空即除。
-    # （自检见 make defconfig 之后 —— 要验最终 .config，防 Kconfig 默认值回填。）
+    # 上面最后一行: 板级 BDF 的 .config 侧路径 = DEVICE_EXTRA_PACKAGES
+    # （image.mk:571 读 CONFIG_TARGET_DEVICE_PACKAGES_* 字符串）。
+    # 注意: 这只是**两条路径之一** —— 主源头是 ipq60xx.mk 的 DEVICE_PACKAGES
+    # （元数据, image.mk:591-595 merge_packages 直装 rootfs, 不看 CONFIG_PACKAGE_），
+    # 见下方 ipq60xx.mk 手术。2026-10-22 首轮实测教训: 只置空本字符串，
+    # board-2.bin 仍在镜像（当时注释误称"置空即除"，已修正）。
+    # BDF 只供 ath11k 带 WiFi 时加载，nowifi 无驱动 → 纯死重，两条路径都要断。
 
     # 关键: wpad-openssl / kmod-ath11k* 位于 qualcommax/Makefile 的
     # DEFAULT_PACKAGES（第 14-16 行），而 DEFAULT_PACKAGES 优先级高于 .config
@@ -329,6 +330,20 @@ if [[ "$Dev" != *"nowifi"* ]]; then
         echo "✓ nowifi: 已从 DEFAULT_PACKAGES 移除 wpad-mesh-openssl / kmod-ath11k*"
     fi
 
+    # 板级 BDF 主源头手术（2026-10-22 源码实证 + 首轮实测失败后的修正）:
+    #   per-device rootfs 包集 = DEVICE_PACKAGES（本文件元数据）+ DEVICE_EXTRA_PACKAGES
+    #   （.config 字符串, 上方 sed 已断），在 image.mk:591-595 merge_packages 合并后
+    #   直装 rootfs，**不看 CONFIG_PACKAGE_*** → 只改 .config 无法移除。
+    #   故与 qca_mk 同款: 备份 + EXIT trap，仅影响本次 nowifi 构建（WiFi 版已先完成）。
+    img_mk="$BASE_PATH/../$BUILD_DIR/target/linux/qualcommax/image/ipq60xx.mk"
+    if [ -f "$img_mk" ]; then
+        cp -f "$img_mk" "$img_mk.nowifi.bak"
+        trap 'if [ -f "$qca_mk.nowifi.bak" ]; then mv -f "$qca_mk.nowifi.bak" "$qca_mk"; fi; if [ -f "$img_mk.nowifi.bak" ]; then mv -f "$img_mk.nowifi.bak" "$img_mk"; fi' EXIT
+        # 只动 DEVICE_PACKAGES 行（ipq60xx.mk:156 v1/v2 公共块），误伤面最小
+        sed -i '/DEVICE_PACKAGES/ s/\bipq-wifi-link_nn6000\b//g' "$img_mk"
+        echo "✓ nowifi: 已从 ipq60xx.mk DEVICE_PACKAGES 移除 ipq-wifi-link_nn6000"
+    fi
+
     make defconfig
     restrict_to_link_nn6000
     make defconfig
@@ -341,12 +356,23 @@ if [[ "$Dev" != *"nowifi"* ]]; then
     echo "编译无 WiFi 版本..."
     make -j$(($(nproc) + 1)) || make -j1 V=s
 
-    # M7: nowifi 编译完成，立即恢复 Makefile 原状并解除 trap
+    # 产物级真值自检（检查类, 失败路径已演示: 含 ipq-wifi 的 manifest 必告警）:
+    #   manifest = 镜像实际装包清单；两变体版本串相同(C4.1) → TARGET_DIR 内
+    #   同名 manifest 此刻已被 nowifi 构建覆盖。含 ipq-wifi = 手术失败或上游改名。
+    if find "$TARGET_DIR" -name '*.manifest' -exec grep -l 'ipq-wifi' {} \; 2>/dev/null | grep -q .; then
+        echo "⚠ nowifi: manifest 仍含 ipq-wifi —— BDF(board-2.bin) 已入镜像（核对 ipq60xx.mk 手术/上游改名）" >&2
+    fi
+
+    # M7: nowifi 编译完成，立即恢复共享源文件原状并解除 trap（两文件各自独立判断）
     if [ -f "$qca_mk.nowifi.bak" ]; then
         mv -f "$qca_mk.nowifi.bak" "$qca_mk"
-        trap - EXIT
         echo "✓ 已恢复 qualcommax/Makefile 原状（nowifi 后处理不再残留）"
     fi
+    if [ -f "$img_mk.nowifi.bak" ]; then
+        mv -f "$img_mk.nowifi.bak" "$img_mk"
+        echo "✓ 已恢复 ipq60xx.mk 原状（nowifi 后处理不再残留）"
+    fi
+    trap - EXIT
 
     echo "复制固件..."
     find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.manifest" -o -name "*efi.img.gz" -o -name "*.itb" -o -name "*.fip" -o -name "*.ubi" -o -name "*rootfs.tar.gz" \) | while read -r file; do
