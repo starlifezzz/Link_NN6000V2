@@ -24,6 +24,10 @@ ROM=${ROM:-/rom}
 
 FAIL=0
 WARN=0
+
+# dmesg 可读性前置探测：不可读时相关检查必须 FAIL，不得用"0 命中"冒充通过（fail-safe）
+DMESG_OK=1
+dmesg >/dev/null 2>&1 || DMESG_OK=0
 ok()   { echo "  [OK]   $*"; }
 bad()  { echo "  [FAIL] $*"; FAIL=$((FAIL + 1)); }
 warn() { echo "  [WARN] $*"; WARN=$((WARN + 1)); }
@@ -73,26 +77,47 @@ case "$cnt" in
     0)           ok "eMMC 健康计数 0" ;;
     *)           warn "eMMC 健康计数非 0: $cnt" ;;
 esac
-ioerr=$(dmesg 2>/dev/null | grep -c 'mmcblk0.*error')
-[ "$ioerr" = "0" ] && ok "mmcblk0 无 I/O 错误" || warn "mmcblk0 I/O 错误计数: $ioerr"
-rec=$(dmesg 2>/dev/null | grep -cE 'EXT4-fs \(sda1\): recovery complete')
-[ "$rec" = "0" ] && info "本次开机无 ext4 recovery" || info "本次开机有 ext4 recovery（=上次非正常关机，C7.4）"
+if [ "$DMESG_OK" = 1 ]; then
+    ioerr=$(dmesg | grep -c 'mmcblk0.*error')
+    [ "$ioerr" = "0" ] && ok "mmcblk0 无 I/O 错误" || warn "mmcblk0 I/O 错误计数: $ioerr"
+    rec=$(dmesg | grep -cE 'EXT4-fs \(sda1\): recovery complete')
+    [ "$rec" = "0" ] && info "本次开机无 ext4 recovery" || info "本次开机有 ext4 recovery（=上次非正常关机，C7.4）"
+else
+    bad "dmesg 不可读，无法检查 mmcblk0 I/O 与 ext4 recovery"
+fi
 
 echo "===== H4 崩溃取证 ====="
 if [ -d /sys/fs/pstore ]; then warn "/sys/fs/pstore 存在（检查残留）"; else ok "无 pstore 残留（该目录不存在）"; fi
-oops=$(dmesg 2>/dev/null | grep -iE 'oops|BUG:|kernel panic' | grep -vc ramoops)
-[ "$oops" = "0" ] && ok "dmesg 无 oops/BUG/panic" || bad "dmesg 命中 $oops 行"
+if [ "$DMESG_OK" = 1 ]; then
+    oops=$(dmesg | grep -iE 'oops|BUG:|kernel panic' | grep -vc ramoops)
+    [ "$oops" = "0" ] && ok "dmesg 无 oops/BUG/panic" || bad "dmesg 命中 $oops 行"
+else
+    bad "dmesg 不可读，无法检查 oops/BUG/panic"
+fi
 dz=$(ps | grep -c '[d]efunct')
 [ "$dz" = "0" ] && ok "无 defunct 进程" || warn "defunct 进程: $dz"
 
 echo "===== H5 产物/内容核对 ====="
 info "revision: $(grep -o "DISTRIB_REVISION='[^']*'" "$ROM/etc/openwrt_release" 2>/dev/null | cut -d"'" -f2)"
-nw=$(grep -cE '^P:.*(ath11k|wpad|hostapd)' "$APK_DB" 2>/dev/null)
-if [ "${nw:-0}" -gt 0 ]; then
-    info "变体: WiFi（无线包命中 $nw）"
+# 变体判据（C4.1 口径）：/rom 无 usr/sbin/wpad* / hostapd* 且无 lib/firmware/ath11k → nowifi。
+# 只认文件内容，不看 apk db（手工 apk add wpad 会污染 db，导致误判）。
+if [ ! -d "$ROM" ]; then
+    warn "$ROM 不存在，无法按内容判定变体"
 else
-    info "变体: nowifi（无线包命中 ${nw:-0}）"
+    wf=0
+    for p in "$ROM"/usr/sbin/wpad* "$ROM"/usr/sbin/hostapd*; do
+        [ -e "$p" ] && wf=$((wf + 1))
+    done
+    af=0
+    [ -d "$ROM/lib/firmware/ath11k" ] && af=1
+    if [ "$wf" -gt 0 ] || [ "$af" -gt 0 ]; then
+        info "变体: WiFi（/rom 无线二进制 ${wf} 个，ath11k fw 目录 ${af}）"
+    else
+        info "变体: nowifi（/rom 无 wpad/hostapd，无 lib/firmware/ath11k）"
+    fi
 fi
+nw=$(grep -cE '^P:.*(ath11k|wpad|hostapd)' "$APK_DB" 2>/dev/null)
+info "  附: apk db 无线包命中 ${nw:-0}（仅参考，判据以 /rom 内容为准）"
 if [ -f "$FOS" ]; then info "$(basename "$FOS") md5: $(md5sum "$FOS" | cut -d' ' -f1)"; else warn "$FOS 不存在"; fi
 
 echo "===== H6 温度/频率 ====="
