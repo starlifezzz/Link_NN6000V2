@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-change_dnsmasq2full() {
-    if ! grep -q "dnsmasq-full" $BUILD_DIR/include/target.mk; then
-        sed -i 's/dnsmasq/dnsmasq-full/g' $BUILD_DIR/include/target.mk
-    fi
-}
+# 2026-10-30 移除 change_dnsmasq2full：上游 include/target.mk 的 DEFAULT_PACKAGES
+# 早已是 dnsmasq-full（f9b0ce7 target.mk:53），旧函数被自身 grep 守卫永久跳过，
+# 属死代码。若将来需要 dnsmasq 变体，改用 .config 的 CONFIG_PACKAGE_dnsmasq* 选择。
 
 fix_default_set() {
     if [ -d "$BUILD_DIR/feeds/luci/collections/" ]; then
@@ -46,7 +44,8 @@ fix_default_set() {
 }
 
 fix_mk_def_depends() {
-    sed -i 's/libustream-mbedtls/libustream-openssl/g' $BUILD_DIR/include/target.mk 2>/dev/null
+    # 2026-10-30: 原 `sed 's/libustream-mbedtls/libustream-openssl/' target.mk` 已删除 ——
+    # 上游 f9b0ce7 的 include/target.mk:28 本就是 libustream-openssl，sed 恒为空操作。
     if [ -f $BUILD_DIR/target/linux/qualcommax/Makefile ]; then
         sed -i 's/wpad-openssl/wpad-mesh-openssl/g' $BUILD_DIR/target/linux/qualcommax/Makefile
         # M8: 核验 wpad 替换生效（build.sh nowifi 段的 sed 依赖此包名，
@@ -325,12 +324,9 @@ update_nss_diag() {
     echo "已安装 nss_diag.sh 到 /usr/bin/"
 }
 
-fix_compile_coremark() {
-    local file="$BUILD_DIR/feeds/packages/utils/coremark/Makefile"
-    if [ -d "$(dirname "$file")" ] && [ -f "$file" ]; then
-        sed -i 's/mkdir \$/mkdir -p \$/g' "$file"
-    fi
-}
+# 2026-10-30 移除 fix_compile_coremark：上游 coremark Makefile 的 Build/Compile
+# 已是 `mkdir -p $(PKG_BUILD_DIR)/$(ARCH)`（packages feed master 48f60904:72），
+# 旧 sed（`mkdir $` → `mkdir -p $`）恒不命中，属死代码。
 
 update_dnsmasq_conf() {
     local file="$BUILD_DIR/package/network/services/dnsmasq/files/dhcp.conf"
@@ -384,6 +380,12 @@ fix_smartdns_makefile() {
     sed -i '/^define Package\/smartdns-ui\/install/,/^endef/d' "$makefile"
     # 删除 smartdns-ui 的 eval
     sed -i '/smartdns-ui)/d' "$makefile"
+    # 2026-10-30 加护栏：以上全是「按形态删行」，上游改写 Makefile 结构时会静默
+    # 删不掉 → smartdns-ui 仍被求值（拉 node/rust host 依赖）。删完必须复查。
+    if grep -q 'smartdns-ui' "$makefile"; then
+        echo "警告: smartdns Makefile 仍残留 smartdns-ui 引用（上游结构已变），需人工核对 fix_smartdns_makefile" >&2
+        grep -n 'smartdns-ui' "$makefile" | head -5 >&2
+    fi
     # 补充缺失的 zlib 依赖
     if grep -q 'DEPENDS:=.*+i386:libatomic +libopenssl' "$makefile"; then
         if ! grep -q '+zlib' "$makefile"; then
@@ -417,38 +419,27 @@ update_nginx_ubus_module() {
         sed -i "s/SOURCE_DATE:=2020-09-06/SOURCE_DATE:=$source_date/g" "$makefile_path"
         sed -i "s/SOURCE_VERSION:=b2d7260dcb428b2fb65540edb28d7538602b4a26/SOURCE_VERSION:=$source_version/g" "$makefile_path"
         sed -i "s/MIRROR_HASH:=515bb9d355ad80916f594046a45c190a68fb6554d6795a54ca15cab8bdd12fda/MIRROR_HASH:=$mirror_hash/g" "$makefile_path"
+        # 2026-10-30 加护栏：pin 是「源串 → 目标串」替换，上游改了 nginx-mod-ubus 的
+        # SOURCE_DATE/VERSION/HASH 时 sed 会静默不命中，包仍会按旧源码构建（症状是
+        # 意料外的模块行为，很难归因）。未命中即报警。
+        if ! grep -qF "SOURCE_VERSION:=$source_version" "$makefile_path"; then
+            echo "警告: nginx-mod-ubus pin 未生效（上游 SOURCE_DATE/SOURCE_VERSION/MIRROR_HASH 已变），请人工同步 update_nginx_ubus_module" >&2
+        fi
         echo "已更新 nginx-mod-ubus 模块的 SOURCE_DATE, SOURCE_VERSION 和 MIRROR_HASH。"
     else
         echo "错误：未找到 $makefile_path 文件，无法更新 nginx-mod-ubus 模块。" >&2
     fi
 }
 
-fix_nginx_configure() {
-    local makefile_path="$BUILD_DIR/feeds/packages/net/nginx/Makefile"
-    if [ -f "$makefile_path" ]; then
-        # 移除不支持的 autotools 参数
-        # M9: 旧写法 `--target=.*\s` 的 `.*\s` 贪婪匹配会吃掉同一行中
-        # 目标参数之后的所有 token（如 --with-http_ssl_module）。
-        # 改为 `--token=value` 精确匹配，只删自身。
-        sed -i 's/--target=[^ ]*//g' "$makefile_path"
-        sed -i 's/--host=[^ ]*//g' "$makefile_path"
-        sed -i 's/--disable-dependency-tracking//g' "$makefile_path"
-        sed -i 's/--program-prefix=[^ ]*//g' "$makefile_path"
-        sed -i 's/--program-suffix=[^ ]*//g' "$makefile_path"
-        echo "已修复 nginx 配置参数，移除不支持的 autotools 选项（精确 token 版）。"
-    else
-        echo "错误：未找到 $makefile_path 文件，无法修复 nginx 配置。" >&2
-    fi
-}
+# 2026-10-30 移除 fix_nginx_configure：该函数删的 5 个 autotools 参数
+# （--target= / --host= / --disable-dependency-tracking / --program-prefix= /
+# --program-suffix=）在 packages feed master 48f60904 的 net/nginx/Makefile 中
+# 已全部不存在，sed 恒为空操作却仍打印「已修复」，属误导性死代码。
 
-fix_openssl_ktls() {
-    local config_in="$BUILD_DIR/package/libs/openssl/Config.in"
-    if [ -f "$config_in" ]; then
-        echo "正在更新 OpenSSL kTLS 配置..."
-        sed -i 's/select PACKAGE_kmod-tls/depends on PACKAGE_kmod-tls/g' "$config_in"
-        sed -i '/depends on PACKAGE_kmod-tls/a\\tdefault y if PACKAGE_kmod-tls' "$config_in"
-    fi
-}
+# 2026-10-30 移除 fix_openssl_ktls：上游 f9b0ce7 的 package/libs/openssl/Config.in
+# 已把 OPENSSL_KTLS 改为无 default 的裸 bool（不再出现 select/depends PACKAGE_kmod-tls），
+# 原 sed 恒不命中 → kTLS 会静默变成关闭。改为在 .config 显式 CONFIG_OPENSSL_KTLS=y
+# （见 configs/link_nn6000v2_immwrt.config），由 build.sh 的 defconfig 后置校验兜底。
 
 install_pbr_isp() {
     local pbr_pkg_dir="$BUILD_DIR/package/feeds/packages/pbr"

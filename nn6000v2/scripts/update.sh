@@ -51,7 +51,6 @@ main() {
     fix_smartdns_makefile
     remove_tweaked_packages
     dedupe_feed_packages
-    change_dnsmasq2full
     fix_default_set
     fix_mk_def_depends
     fix_nss_conn_limit
@@ -68,16 +67,13 @@ main() {
     change_cpuusage
     set_custom_task
     update_nss_diag
-    fix_compile_coremark
     add_backup_info_to_sysupgrade
     remove_attendedsysupgrade
     fix_rust_compile_error
     fix_kconfig_recursive_dependency
     set_nginx_default_config
     update_nginx_ubus_module
-    fix_nginx_configure
     update_uwsgi_limit_as
-    fix_openssl_ktls
     install_pbr_isp
     fix_pbr_ip_forward
 }

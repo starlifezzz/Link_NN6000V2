@@ -251,6 +251,15 @@ make defconfig
 restrict_to_link_nn6000
 make defconfig
 
+# defconfig 后置校验：确认 .config 里「必须由 .config 显式开启」的关键符号真的生效。
+# 背景: 上游曾用 Config.in 的 default 隐式开启 OPENSSL_KTLS，2026-10 改成无 default 裸 bool，
+#       system.sh 的 sed workaround 因此静默失效（已删除）。这里做兜底告警，避免再次静默降级。
+for sym in CONFIG_OPENSSL_KTLS; do
+    if ! grep -q "^${sym}=y$" .config; then
+        echo "警告: ${sym} 在 defconfig 后未生效（上游符号改名/移除 或 .config 缺项），相关功能会静默降级" >&2
+    fi
+done
+
 if [[ $Build_Mod == "debug" ]]; then
     exit 0
 fi

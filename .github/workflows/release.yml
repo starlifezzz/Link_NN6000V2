@@ -69,8 +69,15 @@ jobs:
           # 步骤 2: 初始化构建环境（M3 供应链加固: 下载后先 sha256 校验再执行）
           # 上游脚本更新时校验会失败 —— 这是预期行为，请人工审阅新脚本后更新下面的哈希:
           #   curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh | sha256sum
-          curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh -o /tmp/init_build_environment.sh
-          echo "85f4b2c2aa16f8178b57250f5d2bcf4a2e0707c6b569a3b07510f41fc6185dd8  /tmp/init_build_environment.sh" | sha256sum -c -
+          # 审阅记录: 2026-10-30 更新 pin
+          #   上游 Last-Modified 2026-10-29 02:19:51 GMT, 12722 B / 324 行
+          #   下载源均为已知官方域名(腾讯/清华/USTC 镜像, nodesource, yarnpkg, launchpad,
+          #   keyserver.ubuntu.com, apt.llvm.org, cli.github.com, aliyun pypi, github.com/upx,
+          #   raw.githubusercontent.com/openwrt/luci), 无 base64/eval/异常 IP
+          #   版本变动: golang-1.27-go(已核实 longsleep PPA noble 有 1.27.3), LLVM 23(已核实
+          #   apt.llvm.org/noble llvm-toolchain-noble-23 索引 200), UPX 5.3.0, node 24, gcc 13(noble 默认)
+          curl -fsSL https://build-scripts.immortalwrt.org/init_build_environment.sh -o /tmp/init_build_environment.sh
+          echo "2b2795f9110c675c6eb6b4f1c9b980c3a7294834d06ce3a9819f72df4f890bae  /tmp/init_build_environment.sh" | sha256sum -c -
           sudo bash /tmp/init_build_environment.sh
           
           # 步骤 3: 安装额外依赖
