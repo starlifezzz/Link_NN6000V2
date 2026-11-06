@@ -1,6 +1,17 @@
 #!/bin/sh
 # 获取CPU温度
-cpu_temp=$(cat /sys/devices/virtual/thermal/thermal_zone0/hwmon0/temp1_input 2>/dev/null | awk '{printf("%.1f°C", $0 / 1000)}')
+# 2026-11-06 修正: 原实现硬编码 thermal_zone0，但 zone 编号与传感器对应关系随板子变化。
+# 本机实测 zone0 = nss-top-thermal（41.5°C），真正的 CPU 在 zone4 = cpu-thermal（43.1°C）
+# → tempinfo 长期把 NSS 温度当 CPU 报，且与 patches/cpuinfo（按 *cpu* 匹配）自相矛盾。
+# 改为与 cpuinfo 同一口径：遍历 thermal_zone*，按 type 含 cpu 选取。
+cpu_temp=""
+for _z in /sys/class/thermal/thermal_zone*; do
+    [ -r "$_z/type" ] || continue
+    case "$(cat "$_z/type" 2>/dev/null)" in
+        *cpu*) cpu_temp=$(awk '{printf("%.1f°C", $1 / 1000)}' "$_z/temp" 2>/dev/null); break ;;
+    esac
+done
+
 
 # 获取WiFi温度（仅当 WiFi 存在时读取；无 WiFi 版自动跳过）
 wifi5_temp=""
